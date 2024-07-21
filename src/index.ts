@@ -1,18 +1,34 @@
-/**
- * Welcome to Cloudflare Workers! This is your first worker.
- *
- * - Run `npm run dev` in your terminal to start a development server
- * - Open a browser tab at http://localhost:8787/ to see your worker in action
- * - Run `npm run deploy` to publish your worker
- *
- * Bind resources to your worker in `wrangler.toml`. After adding bindings, a type definition for the
- * `Env` object can be regenerated with `npm run cf-typegen`.
- *
- * Learn more at https://developers.cloudflare.com/workers/
- */
+import { Hono } from "hono";
+import fitbit from "./fitbit";
+import { Bindings } from "./bindings";
 
-export default {
-	async fetch(request, env, ctx): Promise<Response> {
-		return new Response('Hello World!');
-	},
-} satisfies ExportedHandler<Env>;
+const app = new Hono<{ Bindings: Bindings }>();
+
+app.get('/auth', (c) => {
+	return c.redirect(fitbit.GetAuthURL(c.env, c.req.url));
+});
+
+app.get('/oauth/callback', async (c) => {
+	const code = c.req.query('code');
+	if (!code) {
+		return c.text('認証コードを取得できませんでした', 400);
+	}
+
+	try {
+		await fitbit.SetAccessToken(c.env, c.req.url, code);
+		return c.text('fitbitアクセストークンを取得しました');
+	} catch(e) {
+		return c.text('Error: ' + e, 500);
+	}
+});
+
+app.get('/', async (c) => {
+	try {
+		let data = await fitbit.GetWeight(c.env, c.req.url, new Date());
+		return c.text(JSON.stringify(data));
+	} catch(e) {
+		return c.text('Error: ' + e, 500);
+	}
+});
+
+export default app;
