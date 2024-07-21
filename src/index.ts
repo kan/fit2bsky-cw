@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import fitbit from "./fitbit";
+import bluesky from "./bluesky";
 import { Bindings } from "./bindings";
 
 const app = new Hono<{ Bindings: Bindings }>();
@@ -17,6 +18,24 @@ app.get('/oauth/callback', async (c) => {
 	try {
 		await fitbit.SetAccessToken(c.env, c.req.url, code);
 		return c.text('fitbitアクセストークンを取得しました');
+	} catch(e) {
+		return c.text('Error: ' + e, 500);
+	}
+});
+
+app.get('/post', async (c) => {
+	const day = (new Date()).toISOString().split('T')[0];
+	const key = await c.env.FIT2BSKY_KV.get('BSKY_POST_'+day);
+	if (key) {
+		return c.text('本日は投稿済みです', 403);
+	}
+	await c.env.FIT2BSKY_KV.put('BSKY_POST_'+day, 'processed', { expirationTtl: 86400 });
+
+	try {
+		let data = await fitbit.GetWeight(c.env, c.req.url, new Date());
+		const msg = `今日の体重: ${data.weight.toFixed(1)}kg (BMI: ${data.bmi.toFixed(2)} ) 体脂肪率: ${data.fat.toFixed(2)}% via Fitbit`;
+		await bluesky.postMessage(c.env, msg);
+		return c.text('Blueskyへの投稿が完了しました');
 	} catch(e) {
 		return c.text('Error: ' + e, 500);
 	}

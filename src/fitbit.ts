@@ -9,15 +9,17 @@ interface TokenResponse {
 };
 
 interface FitbitWeight {
-	weight: Array<{
-		bmi: number;
-		date: string;
-		fat: number;
-		logId: number;
-		source: string;
-		time: string;
-		weight: number;		
-	}>;
+    bmi: number;
+    date: string;
+    fat: number;
+    logId: number;
+    source: string;
+    time: string;
+    weight: number;		
+}
+
+interface FitbitWeightResponse {
+	weight: Array<FitbitWeight>;
 };
 
 const FITBIT_AUTH_URL = 'https://www.fitbit.com/oauth2/authorize';
@@ -126,7 +128,12 @@ async function GetWeight(env: Bindings, url: string, date: Date): Promise<Fitbit
 		throw Error(`Can't get weight. msg=${msg} status=${res.status}`);
 	}
 
-	return res.json() as Promise<FitbitWeight>;
+	const data = await res.json() as FitbitWeightResponse;
+    if (data.weight?.length == 0) {
+        throw Error(`Invalid response: ${data}`);
+    }
+
+    return data.weight[0];
 }
 
 export default { GetAuthURL, SetAccessToken, GetWeight };
