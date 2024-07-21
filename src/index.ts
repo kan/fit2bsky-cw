@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import fitbit from "./fitbit";
 import bluesky from "./bluesky";
+import sheet from "./sheet";
 import { Bindings } from "./bindings";
 
 const app = new Hono<{ Bindings: Bindings }>();
@@ -35,7 +36,18 @@ app.get('/post', async (c) => {
 		let data = await fitbit.GetWeight(c.env, c.req.url, new Date());
 		const msg = `今日の体重: ${data.weight.toFixed(1)}kg (BMI: ${data.bmi.toFixed(2)} ) 体脂肪率: ${data.fat.toFixed(2)}% via Fitbit`;
 		await bluesky.postMessage(c.env, msg);
+		await sheet.Update(c.env, data.weight);
 		return c.text('Blueskyへの投稿が完了しました');
+	} catch(e) {
+		return c.text('Error: ' + e, 500);
+	}
+});
+
+app.get('/sheet', async (c) => {
+	try {
+		let data = await fitbit.GetWeight(c.env, c.req.url, new Date());
+		await sheet.Update(c.env, data.weight);
+		return c.text('シートへの書き込みが完了しました');
 	} catch(e) {
 		return c.text('Error: ' + e, 500);
 	}
@@ -50,4 +62,14 @@ app.get('/', async (c) => {
 	}
 });
 
-export default app;
+const scheduled: ExportedHandlerScheduledHandler<Bindings> = async (event, env, ctx) => {
+	let data = await fitbit.GetWeight(env, 'https://fit2bsky-cw.kan-fushihara.workers.dev/', new Date());
+	const msg = `今日の体重: ${data.weight.toFixed(1)}kg (BMI: ${data.bmi.toFixed(2)} ) 体脂肪率: ${data.fat.toFixed(2)}% via Fitbit`;
+	await bluesky.postMessage(env, msg);
+	await sheet.Update(env, data.weight);
+};
+
+export default {
+	fetch: app.fetch,
+	scheduled,
+}

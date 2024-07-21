@@ -4,4 +4,7 @@ export type Bindings = {
     CLIENT_SECRET: string
     BSKY_HANDLE: string
     BSKY_PASSWORD: string
+    SHEET_ID: string
+    SHEET_NAME: string
+    GOOGLE_CREDENTIALS: string
 }
