@@ -62,19 +62,10 @@ async function SetAccessToken(env: Bindings, url: string, code: string): Promise
 
     const data = await res.json() as TokenResponse;
 
-    await env.FIT2BSKY_KV.put(ACCESS_TOKEN_KEY, data.access_token);
     await env.FIT2BSKY_KV.put(REFRESH_TOKEN_KEY, data.refresh_token);
 }
 
-async function getAccessToken(env: Bindings, url: string, refresh: boolean = false): Promise<string> {
-    if (!refresh) {
-        const token = await env.FIT2BSKY_KV.get(ACCESS_TOKEN_KEY);
-        if (!token) {
-            throw Error(`Can't get access token`);
-        }
-        return token;
-    }
-
+async function getAccessToken(env: Bindings, url: string): Promise<string> {
     const token = await env.FIT2BSKY_KV.get(REFRESH_TOKEN_KEY);
     if (!token) {
         throw Error(`Can't get refresh token`);
@@ -99,7 +90,6 @@ async function getAccessToken(env: Bindings, url: string, refresh: boolean = fal
 
     const data = await res.json() as TokenResponse;
 
-    await env.FIT2BSKY_KV.put(ACCESS_TOKEN_KEY, data.access_token);
     await env.FIT2BSKY_KV.put(REFRESH_TOKEN_KEY, data.refresh_token);
 
     return data.access_token;
@@ -108,10 +98,7 @@ async function getAccessToken(env: Bindings, url: string, refresh: boolean = fal
 async function GetWeight(env: Bindings, url: string, date: Date): Promise<FitbitWeight> {
 	let token = await getAccessToken(env, url);
 	if (!token) {
-		token = await getAccessToken(env, url, true);
-		if (!token) {
-            throw Error(`Can't get access token`);
-		}
+        throw Error(`Can't get access token`);
 	}
 
 	let weightUrl = FITBIT_WEIGHT_URL;
