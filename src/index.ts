@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import fitbit from "./fitbit";
 import bluesky from "./bluesky";
 import sheet from "./sheet";
+import { getJPYRate } from "./fx";
 import { Bindings } from "./bindings";
 
 const app = new Hono<{ Bindings: Bindings }>();
@@ -34,7 +35,8 @@ app.get('/post', async (c) => {
 
 	try {
 		let data = await fitbit.GetWeight(c.env, c.req.url, new Date());
-		const msg = `今日の体重: ${data.weight.toFixed(1)}kg (BMI: ${data.bmi.toFixed(2)} ) 体脂肪率: ${data.fat.toFixed(2)}% via Fitbit`;
+		let jpy = await getJPYRate();
+		const msg = `今日の体重: ${data.weight.toFixed(1)}kg (BMI: ${data.bmi.toFixed(2)} ) 体脂肪率: ${data.fat.toFixed(2)}% via Fitbit\n本日の1ドル: ${jpy.toFixed(1)}円`;
 		await bluesky.postMessage(c.env, msg);
 		await sheet.Update(c.env, data.weight);
 		return c.text('Blueskyへの投稿が完了しました');
@@ -48,6 +50,15 @@ app.get('/sheet', async (c) => {
 		let data = await fitbit.GetWeight(c.env, c.req.url, new Date());
 		await sheet.Update(c.env, data.weight);
 		return c.text('シートへの書き込みが完了しました');
+	} catch(e) {
+		return c.text('Error: ' + e, 500);
+	}
+});
+
+app.get('/fx', async (c) => {
+	try {
+		let jpy = await getJPYRate();
+		return c.text(`${jpy.toFixed(1)}円`);
 	} catch(e) {
 		return c.text('Error: ' + e, 500);
 	}
