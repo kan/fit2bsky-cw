@@ -75,7 +75,8 @@ app.get('/', async (c) => {
 
 const scheduled: ExportedHandlerScheduledHandler<Bindings> = async (event, env, ctx) => {
 	let data = await fitbit.GetWeight(env, 'https://fit2bsky-cw.kan-fushihara.workers.dev/', new Date());
-	const msg = `今日の体重: ${data.weight.toFixed(1)}kg (BMI: ${data.bmi.toFixed(2)} ) 体脂肪率: ${data.fat.toFixed(2)}% via Fitbit`;
+	let jpy = await getJPYRate();
+	const msg = `今日の体重: ${data.weight.toFixed(1)}kg (BMI: ${data.bmi.toFixed(2)} ) 体脂肪率: ${data.fat.toFixed(2)}% via Fitbit\n本日の1ドル: ${jpy.toFixed(1)}円`;
 	await bluesky.postMessage(env, msg);
 	await sheet.Update(env, data.weight);
 };
