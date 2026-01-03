@@ -1,8 +1,9 @@
 import { Hono } from 'hono';
-import fitbit from './fitbit';
+import fitbit, { FitbitWeight } from './fitbit';
 import bluesky from './bluesky';
 import sheet from './sheet';
 import { getJPYRate } from './fx';
+import { generateComment, WeightContext } from './ai';
 import { Bindings } from './bindings';
 
 const app = new Hono<{ Bindings: Bindings }>();
@@ -10,6 +11,8 @@ const app = new Hono<{ Bindings: Bindings }>();
 const BSKY_POST_KEY_PREFIX = 'BSKY_POST_';
 const SHEET_WRITE_KEY_PREFIX = 'SHEET_WRITE_';
 const ERROR_LOG_KEY_PREFIX = 'ERROR_LOG_';
+const STREAK_KEY = 'MEASUREMENT_STREAK';
+const LAST_MEASUREMENT_KEY = 'LAST_MEASUREMENT_DATE';
 
 function getToday(): string {
 	return new Date().toISOString().split('T')[0];
@@ -48,6 +51,64 @@ async function markSheetWritten(kv: KVNamespace): Promise<void> {
 	await kv.put(`${SHEET_WRITE_KEY_PREFIX}${day}`, 'written', { expirationTtl: 86400 });
 }
 
+async function getStreak(kv: KVNamespace): Promise<number> {
+	const streak = await kv.get(STREAK_KEY);
+	return streak ? parseInt(streak, 10) : 0;
+}
+
+async function updateStreak(kv: KVNamespace): Promise<number> {
+	const today = getToday();
+	const lastDate = await kv.get(LAST_MEASUREMENT_KEY);
+	let streak = await getStreak(kv);
+
+	if (lastDate === today) {
+		return streak;
+	}
+
+	const yesterday = new Date();
+	yesterday.setDate(yesterday.getDate() - 1);
+	const yesterdayStr = yesterday.toISOString().split('T')[0];
+
+	if (lastDate === yesterdayStr) {
+		streak += 1;
+	} else {
+		streak = 1;
+	}
+
+	await kv.put(STREAK_KEY, streak.toString());
+	await kv.put(LAST_MEASUREMENT_KEY, today);
+
+	return streak;
+}
+
+function getDateNDaysAgo(days: number): Date {
+	const date = new Date();
+	date.setDate(date.getDate() - days);
+	return date;
+}
+
+async function getWeightSafe(env: Bindings, url: string, date: Date): Promise<FitbitWeight | null> {
+	try {
+		return await fitbit.GetWeight(env, url, date);
+	} catch {
+		return null;
+	}
+}
+
+async function buildWeightContext(env: Bindings, url: string, current: FitbitWeight, streakDays: number): Promise<WeightContext> {
+	const oneYearAgo = await getWeightSafe(env, url, getDateNDaysAgo(365));
+	const oneMonthAgo = await getWeightSafe(env, url, getDateNDaysAgo(30));
+	const targetWeight = parseFloat(env.TARGET_WEIGHT);
+
+	return {
+		current,
+		oneYearAgo,
+		oneMonthAgo,
+		targetWeight,
+		streakDays,
+	};
+}
+
 app.get('/auth', (c) => {
 	return c.redirect(fitbit.GetAuthURL(c.env, c.req.url));
 });
@@ -71,6 +132,7 @@ app.get('/post', async (c) => {
 
 	try {
 		const data = await fitbit.GetWeight(c.env, c.req.url, new Date());
+		const streakDays = await updateStreak(c.env.FIT2BSKY_KV);
 
 		// Bluesky投稿（未投稿の場合のみ）
 		if (await isBlueskyPosted(c.env.FIT2BSKY_KV)) {
@@ -78,10 +140,16 @@ app.get('/post', async (c) => {
 		} else {
 			try {
 				const jpy = await getJPYRate();
-				const msg = `今日の体重: ${data.weight.toFixed(1)}kg (BMI: ${data.bmi.toFixed(2)} ) 体脂肪率: ${data.fat.toFixed(2)}% via Fitbit\n本日の1ドル: ${jpy.toFixed(1)}円`;
+				const context = await buildWeightContext(c.env, c.req.url, data, streakDays);
+				const aiComment = generateComment(context);
+				const msg = `今日の体重: ${data.weight.toFixed(1)}kg (BMI: ${data.bmi.toFixed(2)}) 体脂肪率: ${data.fat.toFixed(2)}%
+連続${streakDays}日目 | 1$=${jpy.toFixed(1)}円
+
+${aiComment}`;
 				await bluesky.postMessage(c.env, msg);
 				await markBlueskyPosted(c.env.FIT2BSKY_KV);
 				results.push('Bluesky: 投稿完了');
+				results.push(`AIコメント: ${aiComment}`);
 			} catch (e) {
 				await logError(c.env.FIT2BSKY_KV, 'bluesky_post', e);
 				results.push(`Bluesky: エラー - ${e}`);
@@ -176,11 +244,18 @@ app.get('/', async (c) => {
 	const errorLogs = await c.env.FIT2BSKY_KV.get(errorKey);
 	const hasErrors = errorLogs !== null;
 	const errorCount = hasErrors ? JSON.parse(errorLogs).length : 0;
+	const streakDays = await getStreak(c.env.FIT2BSKY_KV);
+	const targetWeight = parseFloat(c.env.TARGET_WEIGHT);
 
 	let weightData = null;
 	let weightError = null;
+	let aiComment = null;
+	let diffFromTarget = null;
 	try {
 		weightData = await fitbit.GetWeight(c.env, c.req.url, new Date());
+		diffFromTarget = weightData.weight - targetWeight;
+		const context = await buildWeightContext(c.env, c.req.url, weightData, streakDays);
+		aiComment = generateComment(context);
 	} catch (e) {
 		weightError = e instanceof Error ? e.message : String(e);
 	}
@@ -234,6 +309,17 @@ app.get('/', async (c) => {
 		.links a.danger:hover { background: #dc2626; }
 		.footer { text-align: center; margin-top: 30px; color: #888; font-size: 0.9em; }
 		.footer a { color: #1a85ff; }
+		.ai-comment {
+			background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+			color: white;
+			padding: 15px 20px;
+			border-radius: 8px;
+			font-size: 1.1em;
+			margin-top: 15px;
+		}
+		.target-info { color: #666; font-size: 0.9em; margin-top: 10px; }
+		.diff-positive { color: #ef4444; }
+		.diff-negative { color: #22c55e; }
 	</style>
 </head>
 <body>
@@ -267,7 +353,11 @@ app.get('/', async (c) => {
 			<tr><th>BMI</th><td>${weightData.bmi.toFixed(2)}</td></tr>
 			<tr><th>体脂肪率</th><td>${weightData.fat.toFixed(2)} %</td></tr>
 			<tr><th>測定時刻</th><td>${weightData.time}</td></tr>
-		</table>`
+			<tr><th>目標体重</th><td>${targetWeight.toFixed(1)} kg</td></tr>
+			<tr><th>目標との差</th><td class="${diffFromTarget !== null && diffFromTarget > 0 ? 'diff-positive' : 'diff-negative'}">${diffFromTarget !== null ? (diffFromTarget > 0 ? '+' : '') + diffFromTarget.toFixed(1) : '-'} kg</td></tr>
+			<tr><th>連続記録</th><td>${streakDays} 日</td></tr>
+		</table>
+		${aiComment ? `<div class="ai-comment">💬 ${aiComment}</div>` : ''}`
 				: `<p class="status-ng">データ取得エラー: ${weightError}</p>`
 		}
 	</div>
@@ -315,11 +405,18 @@ const scheduled: ExportedHandlerScheduledHandler<Bindings> = async (event, env) 
 		return;
 	}
 
+	const streakDays = await updateStreak(env.FIT2BSKY_KV);
+
 	// Bluesky投稿（朝9時のcronかつ未投稿の場合のみ）
 	if (isMorningRun && !(await isBlueskyPosted(env.FIT2BSKY_KV))) {
 		try {
 			const jpy = await getJPYRate();
-			const msg = `今日の体重: ${data.weight.toFixed(1)}kg (BMI: ${data.bmi.toFixed(2)} ) 体脂肪率: ${data.fat.toFixed(2)}% via Fitbit\n本日の1ドル: ${jpy.toFixed(1)}円`;
+			const context = await buildWeightContext(env, baseUrl, data, streakDays);
+			const aiComment = generateComment(context);
+			const msg = `今日の体重: ${data.weight.toFixed(1)}kg (BMI: ${data.bmi.toFixed(2)}) 体脂肪率: ${data.fat.toFixed(2)}%
+連続${streakDays}日目 | 1$=${jpy.toFixed(1)}円
+
+${aiComment}`;
 			await bluesky.postMessage(env, msg);
 			await markBlueskyPosted(env.FIT2BSKY_KV);
 		} catch (e) {

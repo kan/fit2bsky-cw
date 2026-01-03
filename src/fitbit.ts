@@ -8,7 +8,7 @@ interface TokenResponse {
 	scope: string;
 }
 
-interface FitbitWeight {
+export interface FitbitWeight {
 	bmi: number;
 	date: string;
 	fat: number;

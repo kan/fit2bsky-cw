@@ -8,4 +8,5 @@ export type Bindings = {
 	SHEET_NAME: string;
 	GOOGLE_CREDENTIALS: string;
 	BASE_URL: string;
+	TARGET_WEIGHT: string;
 };
