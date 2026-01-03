@@ -7,5 +7,5 @@ export type Bindings = {
 	SHEET_ID: string;
 	SHEET_NAME: string;
 	GOOGLE_CREDENTIALS: string;
-	BASE_URL?: string;
+	BASE_URL: string;
 };

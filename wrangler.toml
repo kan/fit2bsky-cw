@@ -9,5 +9,8 @@ binding = "FIT2BSKY_KV"
 id = "6b63fe49f27f429da0e7836a07fc73e3"
 preview_id = "63bfdea453d0471ca546f84865d574e8"
 
+[vars]
+BASE_URL = "https://fit2bsky-cw.kan-fushihara.workers.dev/"
+
 [triggers]
 crons = ["0 0 * * *", "0 3 * * *", "0 12 * * *"]

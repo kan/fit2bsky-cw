@@ -13,7 +13,7 @@ Fitbitで測定した体重データをBlueskyに自動投稿するボット。C
 
 ```
 src/
-├── index.ts      # エントリーポイント、ルーティング、cronハンドラ
+├── index.ts      # エントリーポイント、ルーティング、cronハンドラ、ダッシュボード
 ├── fitbit.ts     # Fitbit API連携（OAuth2、体重取得）
 ├── bluesky.ts    # Bluesky投稿
 ├── sheet.ts      # Google Spreadsheet書き込み
@@ -25,14 +25,15 @@ src/
 
 | パス | 説明 |
 |------|------|
-| `/` | 当日の体重データをJSON表示 |
+| `/` | ダッシュボード（ステータス・体重データ・各機能へのリンク） |
 | `/auth` | Fitbit OAuth2認証開始 |
 | `/oauth/callback` | OAuth2コールバック |
 | `/post` | Bluesky投稿 + シート書き込み（各1日1回制限） |
 | `/sheet` | シートへの書き込みのみ（1日1回制限） |
 | `/fx` | ドル円レート表示 |
-| `/status` | 本日の投稿・書き込み状況を確認 |
-| `/errors` | エラーログを確認（`?date=YYYY-MM-DD`で日付指定可） |
+| `/weight` | 体重データJSON |
+| `/status` | 本日の投稿・書き込み状況JSON |
+| `/errors` | エラーログ確認（`?date=YYYY-MM-DD`で日付指定可） |
 
 ## 定期実行
 
@@ -60,7 +61,15 @@ src/
 - エラーはKVに `ERROR_LOG_{date}` として7日間保存
 - `/errors`エンドポイントで確認可能
 
-## 環境変数（Cloudflare Secrets）
+## 環境変数
+
+### wrangler.toml で設定
+
+| 変数名 | 説明 |
+|--------|------|
+| `BASE_URL` | アプリケーションのベースURL |
+
+### Cloudflare Secrets で設定
 
 | 変数名 | 説明 |
 |--------|------|
@@ -71,14 +80,18 @@ src/
 | `SHEET_ID` | Google SpreadsheetのID |
 | `SHEET_NAME` | 書き込み先シート名 |
 | `GOOGLE_CREDENTIALS` | Google Service Account JSON |
-| `BASE_URL` | （任意）ベースURL |
 
 ## 開発コマンド
 
 ```sh
-npm run dev      # ローカル開発サーバー
-npm run deploy   # デプロイ
-npm test         # テスト実行
+npm run dev           # ローカル開発サーバー
+npm run deploy        # デプロイ
+npm test              # テスト実行
+npm run lint          # ESLintチェック
+npm run lint:fix      # ESLint自動修正
+npm run format        # Prettierフォーマット
+npm run format:check  # フォーマットチェック
+npm run cf-typegen    # Cloudflare型定義生成
 ```
 
 ## KVキー

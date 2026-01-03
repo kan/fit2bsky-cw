@@ -159,17 +159,149 @@ app.get('/status', async (c) => {
 	});
 });
 
-app.get('/', async (c) => {
+app.get('/weight', async (c) => {
 	try {
 		const data = await fitbit.GetWeight(c.env, c.req.url, new Date());
-		return c.text(JSON.stringify(data));
+		return c.json(data);
 	} catch (e) {
 		return c.text('Error: ' + e, 500);
 	}
 });
 
+app.get('/', async (c) => {
+	const day = getToday();
+	const bskyPosted = await isBlueskyPosted(c.env.FIT2BSKY_KV);
+	const sheetWritten = await isSheetWritten(c.env.FIT2BSKY_KV);
+	const errorKey = `${ERROR_LOG_KEY_PREFIX}${day}`;
+	const errorLogs = await c.env.FIT2BSKY_KV.get(errorKey);
+	const hasErrors = errorLogs !== null;
+	const errorCount = hasErrors ? JSON.parse(errorLogs).length : 0;
+
+	let weightData = null;
+	let weightError = null;
+	try {
+		weightData = await fitbit.GetWeight(c.env, c.req.url, new Date());
+	} catch (e) {
+		weightError = e instanceof Error ? e.message : String(e);
+	}
+
+	const html = `<!DOCTYPE html>
+<html lang="ja">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>fit2bsky-cw Dashboard</title>
+	<style>
+		* { box-sizing: border-box; }
+		body {
+			font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+			max-width: 800px;
+			margin: 0 auto;
+			padding: 20px;
+			background: #f5f5f5;
+			color: #333;
+		}
+		h1 { color: #1a85ff; margin-bottom: 10px; }
+		.subtitle { color: #666; margin-bottom: 30px; }
+		.card {
+			background: white;
+			border-radius: 8px;
+			padding: 20px;
+			margin-bottom: 20px;
+			box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+		}
+		.card h2 { margin-top: 0; color: #444; font-size: 1.2em; }
+		table { width: 100%; border-collapse: collapse; }
+		th, td { padding: 10px; text-align: left; border-bottom: 1px solid #eee; }
+		th { color: #666; font-weight: normal; width: 40%; }
+		.status-ok { color: #22c55e; font-weight: bold; }
+		.status-ng { color: #ef4444; font-weight: bold; }
+		.status-warn { color: #f59e0b; font-weight: bold; }
+		.links { display: flex; flex-wrap: wrap; gap: 10px; }
+		.links a {
+			display: inline-block;
+			padding: 10px 20px;
+			background: #1a85ff;
+			color: white;
+			text-decoration: none;
+			border-radius: 6px;
+			font-size: 0.9em;
+		}
+		.links a:hover { background: #1570d6; }
+		.links a.secondary { background: #6b7280; }
+		.links a.secondary:hover { background: #4b5563; }
+		.links a.danger { background: #ef4444; }
+		.links a.danger:hover { background: #dc2626; }
+		.footer { text-align: center; margin-top: 30px; color: #888; font-size: 0.9em; }
+		.footer a { color: #1a85ff; }
+	</style>
+</head>
+<body>
+	<h1>fit2bsky-cw</h1>
+	<p class="subtitle">Fitbit体重データ → Bluesky投稿 Bot</p>
+
+	<div class="card">
+		<h2>本日のステータス (${day})</h2>
+		<table>
+			<tr>
+				<th>Bluesky投稿</th>
+				<td class="${bskyPosted ? 'status-ok' : 'status-ng'}">${bskyPosted ? '投稿済み' : '未投稿'}</td>
+			</tr>
+			<tr>
+				<th>シート書き込み</th>
+				<td class="${sheetWritten ? 'status-ok' : 'status-ng'}">${sheetWritten ? '書き込み済み' : '未書き込み'}</td>
+			</tr>
+			<tr>
+				<th>エラー</th>
+				<td class="${hasErrors ? 'status-warn' : 'status-ok'}">${hasErrors ? errorCount + '件のエラー' : 'なし'}</td>
+			</tr>
+		</table>
+	</div>
+
+	<div class="card">
+		<h2>本日の体重データ</h2>
+		${
+			weightData
+				? `<table>
+			<tr><th>体重</th><td><strong>${weightData.weight.toFixed(1)} kg</strong></td></tr>
+			<tr><th>BMI</th><td>${weightData.bmi.toFixed(2)}</td></tr>
+			<tr><th>体脂肪率</th><td>${weightData.fat.toFixed(2)} %</td></tr>
+			<tr><th>測定時刻</th><td>${weightData.time}</td></tr>
+		</table>`
+				: `<p class="status-ng">データ取得エラー: ${weightError}</p>`
+		}
+	</div>
+
+	<div class="card">
+		<h2>アクション</h2>
+		<div class="links">
+			<a href="/post">投稿実行</a>
+			<a href="/sheet" class="secondary">シート書き込み</a>
+			<a href="/auth" class="secondary">Fitbit認証</a>
+		</div>
+	</div>
+
+	<div class="card">
+		<h2>データ・ログ</h2>
+		<div class="links">
+			<a href="/status" class="secondary">ステータスJSON</a>
+			<a href="/weight" class="secondary">体重データJSON</a>
+			<a href="/errors" class="secondary">エラーログ</a>
+			<a href="/fx" class="secondary">為替レート</a>
+		</div>
+	</div>
+
+	<div class="footer">
+		<a href="https://github.com/kan/fit2bsky-cw" target="_blank">GitHub Repository</a>
+	</div>
+</body>
+</html>`;
+
+	return c.html(html);
+});
+
 const scheduled: ExportedHandlerScheduledHandler<Bindings> = async (event, env) => {
-	const baseUrl = env.BASE_URL || 'https://fit2bsky-cw.kan-fushihara.workers.dev/';
+	const baseUrl = env.BASE_URL;
 
 	// cronの実行時刻を確認（UTC 0時 = JST 9時）
 	const hour = new Date(event.scheduledTime).getUTCHours();
