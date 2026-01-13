@@ -87,6 +87,13 @@ function getDateNDaysAgo(days: number): Date {
 	return date;
 }
 
+function formatPostMessage(weight: FitbitWeight, streakDays: number, jpy: number, aiComment: string): string {
+	return `今日の体重: ${weight.weight.toFixed(1)}kg (BMI: ${weight.bmi.toFixed(2)}) 体脂肪率: ${weight.fat.toFixed(2)}%
+連続${streakDays}日目 | 1$=${jpy.toFixed(1)}円
+
+AI「${aiComment}」`;
+}
+
 async function getWeightSafe(env: Bindings, url: string, date: Date): Promise<FitbitWeight | null> {
 	try {
 		return await fitbit.GetWeight(env, url, date);
@@ -142,10 +149,7 @@ app.get('/post', async (c) => {
 				const jpy = await getJPYRate();
 				const context = await buildWeightContext(c.env, c.req.url, data, streakDays);
 				const aiComment = generateComment(context);
-				const msg = `今日の体重: ${data.weight.toFixed(1)}kg (BMI: ${data.bmi.toFixed(2)}) 体脂肪率: ${data.fat.toFixed(2)}%
-連続${streakDays}日目 | 1$=${jpy.toFixed(1)}円
-
-${aiComment}`;
+				const msg = formatPostMessage(data, streakDays, jpy, aiComment);
 				await bluesky.postMessage(c.env, msg);
 				await markBlueskyPosted(c.env.FIT2BSKY_KV);
 				results.push('Bluesky: 投稿完了');
@@ -390,12 +394,8 @@ app.get('/', async (c) => {
 	return c.html(html);
 });
 
-const scheduled: ExportedHandlerScheduledHandler<Bindings> = async (event, env) => {
+const scheduled: ExportedHandlerScheduledHandler<Bindings> = async (_event, env) => {
 	const baseUrl = env.BASE_URL;
-
-	// cronの実行時刻を確認（UTC 0時 = JST 9時）
-	const hour = new Date(event.scheduledTime).getUTCHours();
-	const isMorningRun = hour === 0;
 
 	let data;
 	try {
@@ -407,16 +407,13 @@ const scheduled: ExportedHandlerScheduledHandler<Bindings> = async (event, env) 
 
 	const streakDays = await updateStreak(env.FIT2BSKY_KV);
 
-	// Bluesky投稿（朝9時のcronかつ未投稿の場合のみ）
-	if (isMorningRun && !(await isBlueskyPosted(env.FIT2BSKY_KV))) {
+	// Bluesky投稿（未投稿の場合のみ）
+	if (!(await isBlueskyPosted(env.FIT2BSKY_KV))) {
 		try {
 			const jpy = await getJPYRate();
 			const context = await buildWeightContext(env, baseUrl, data, streakDays);
 			const aiComment = generateComment(context);
-			const msg = `今日の体重: ${data.weight.toFixed(1)}kg (BMI: ${data.bmi.toFixed(2)}) 体脂肪率: ${data.fat.toFixed(2)}%
-連続${streakDays}日目 | 1$=${jpy.toFixed(1)}円
-
-${aiComment}`;
+			const msg = formatPostMessage(data, streakDays, jpy, aiComment);
 			await bluesky.postMessage(env, msg);
 			await markBlueskyPosted(env.FIT2BSKY_KV);
 		} catch (e) {

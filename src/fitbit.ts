@@ -94,15 +94,9 @@ async function getAccessToken(env: Bindings, url: string): Promise<string> {
 	return data.access_token;
 }
 
-async function GetWeight(env: Bindings, url: string, date: Date): Promise<FitbitWeight> {
-	let token = await getAccessToken(env, url);
-	if (!token) {
-		throw Error(`Can't get access token`);
-	}
-
-	let weightUrl = FITBIT_WEIGHT_URL;
+async function fetchWeight(token: string, date: Date): Promise<FitbitWeightResponse> {
 	const day = date.toISOString().split('T')[0];
-	weightUrl = weightUrl.replace('<DATE>', day);
+	const weightUrl = FITBIT_WEIGHT_URL.replace('<DATE>', day);
 	const res = await fetch(weightUrl, {
 		method: 'GET',
 		headers: {
@@ -110,16 +104,38 @@ async function GetWeight(env: Bindings, url: string, date: Date): Promise<Fitbit
 		},
 	});
 	if (!res.ok) {
-		let msg = await res.text();
+		const msg = await res.text();
 		throw Error(`Can't get weight. msg=${msg} status=${res.status}`);
 	}
 
-	const data = (await res.json()) as FitbitWeightResponse;
-	if (data.weight?.length == 0) {
-		throw Error(`Invalid response: ${JSON.stringify(data)}`);
+	return (await res.json()) as FitbitWeightResponse;
+}
+
+async function GetWeight(env: Bindings, url: string, date: Date, maxRetries: number = 3): Promise<FitbitWeight> {
+	const token = await getAccessToken(env, url);
+	if (!token) {
+		throw Error(`Can't get access token`);
 	}
 
-	return data.weight[0];
+	let lastError: Error | null = null;
+	for (let attempt = 0; attempt < maxRetries; attempt++) {
+		if (attempt > 0) {
+			// 指数バックオフ: 1秒、2秒、4秒...
+			await new Promise((resolve) => setTimeout(resolve, 1000 * Math.pow(2, attempt - 1)));
+		}
+
+		try {
+			const data = await fetchWeight(token, date);
+			if (data.weight?.length > 0) {
+				return data.weight[0];
+			}
+			lastError = new Error(`Empty weight response (attempt ${attempt + 1}/${maxRetries})`);
+		} catch (e) {
+			lastError = e instanceof Error ? e : new Error(String(e));
+		}
+	}
+
+	throw lastError ?? new Error('Failed to get weight after retries');
 }
 
 export default { GetAuthURL, SetAccessToken, GetWeight };
