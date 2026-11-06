@@ -94,6 +94,16 @@ npm run format:check  # フォーマットチェック
 npm run cf-typegen    # Cloudflare型定義生成
 ```
 
+## CI
+
+`.github/workflows/ci.yml` が main への push と PR で `lint`、`format:check`、テスト（`npm test -- --run`）を回す。
+デプロイは CI に入れず、手元で `npm run deploy` する。依存の更新は Dependabot（`.github/dependabot.yml`）が
+npm と GitHub Actions のそれぞれで週に 1 度、1 本の PR にまとめて出す。
+
+action の `uses:` は完全な版のタグ（`@v7.0.1`）で書き、実際に動く commit は `.github/workflows/actions.lock` が
+固定する。lockfile は手で編集しない。`uses:` を変えたら repo のルートで `gh actions-lock` を実行し、workflow と
+一緒にコミットする（`verify-lockfile.yml` が検査する。運用の正本は kan/dotfiles の `docs/github-actions.md`）。
+
 ## KVキー
 
 | キー | TTL | 説明 |

@@ -1,0 +1,29 @@
+name: CI
+
+# lint、フォーマットの検査、テスト（@cloudflare/vitest-pool-workers）を回す。Dependabot の npm の PR も
+# ここを通るので、壊れる更新はマージ前に落ちる。デプロイ（wrangler deploy）は CI に入れず、手元で行う。
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run format:check
+      # npm test は vitest の watch モードなので、一度だけ流す
+      - run: npm test -- --run

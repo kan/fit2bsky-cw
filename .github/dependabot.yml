@@ -1,0 +1,31 @@
+version: 2
+updates:
+  # 更新は ecosystem ごとに 1 つの PR にまとめる。npm の PR は全部が同じ package-lock.json を
+  # 触るので、個別に出すと 1 件取り込むたびに残りが衝突して作り直しになる。
+  #
+  # cooldown: 公開から一定の日数が経った版だけを取り込む。問題のある版や、乗っ取られて
+  # 公開された版は、たいてい数日のうちに取り下げられるため。効くのはバージョン更新だけで、
+  # セキュリティ更新は対象外なので遅れない。
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+      semver-major-days: 14
+    groups:
+      npm:
+        patterns:
+          - "*"
+  # github-actions は semver 別の日数に対応していないので default-days だけ。PR は
+  # .github/workflows/actions.lock の該当エントリも作り直す。
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 3
+    groups:
+      github-actions:
+        patterns:
+          - "*"
