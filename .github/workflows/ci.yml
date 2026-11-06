@@ -1,6 +1,6 @@
 name: CI
 
-# lint、フォーマットの検査、テスト（@cloudflare/vitest-pool-workers）を回す。Dependabot の npm の PR も
+# lint、フォーマットの検査、テスト（@cloudflare/vitest-plugin）を回す。Dependabot の npm の PR も
 # ここを通るので、壊れる更新はマージ前に落ちる。デプロイ（wrangler deploy）は CI に入れず、手元で行う。
 on:
   push:

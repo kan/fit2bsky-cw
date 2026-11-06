@@ -13,6 +13,11 @@ updates:
     cooldown:
       default-days: 7
       semver-major-days: 14
+    # typescript-eslint の peer が typescript <6.1.0 なので、それより新しい版は npm ci が
+    # ERESOLVE で落ちる。typescript-eslint が対応したら外す。
+    ignore:
+      - dependency-name: typescript
+        versions: [">=6.1.0"]
     groups:
       npm:
         patterns:
