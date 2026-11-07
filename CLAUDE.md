@@ -13,7 +13,9 @@ Fitbit で測定した体重データを Google Health API から取得し、Blu
 
 ```
 src/
-├── index.ts      # エントリーポイント、ルーティング、cronハンドラ、ダッシュボード
+├── index.ts      # エントリーポイント、ルーティング、cronハンドラ
+├── daily.ts      # その日の処理（体重取得・投稿・シート書き込み）とKVのフラグ。/post・/sheet・cron で共有
+├── dashboard.ts  # ダッシュボードのHTML（hono/html でエスケープ）
 ├── health.ts     # Google Health API連携（Google OAuth2、体重・体脂肪率の取得、BMIの計算）
 ├── date.ts       # JSTの日付の計算
 ├── ai.ts         # 投稿に添えるAIコメントの選択
@@ -31,8 +33,8 @@ src/
 | `/` | ダッシュボード（ステータス・体重データ・各機能へのリンク） |
 | `/auth` | Google Health API の OAuth2 認証開始 |
 | `/oauth/callback` | OAuth2コールバック |
-| `/post` | Bluesky投稿 + シート書き込み（各1日1回制限） |
-| `/sheet` | シートへの書き込みのみ（1日1回制限） |
+| `POST /post` | Bluesky 投稿 + シート書き込み（各 1 日 1 回制限） |
+| `POST /sheet` | シートへの書き込みのみ（1 日 1 回制限） |
 | `/fx` | ドル円レート表示 |
 | `/weight` | 体重データJSON |
 | `/status` | 本日の投稿・書き込み状況JSON |
@@ -52,7 +54,7 @@ src/
 
 ### Bluesky投稿
 - 全てのcron実行時に未投稿であれば投稿を試みる
-- 1日1回のみ投稿（KVで `BSKY_POST_{date}` を管理）
+- 1 日 1 回のみ投稿（KV で `BSKY_POST_{date}` を管理）。KV は結果整合なので、cron の最中に手で `/post` を実行すると二重に投稿し得るが、個人用の bot なので許容している
 - `/post`エンドポイントでも投稿可能（未投稿の場合のみ）
 
 ### シート書き込み

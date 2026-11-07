@@ -6,9 +6,9 @@ export function jstDate(offsetDays = 0, now: Date = new Date()): string {
 	return new Date(now.getTime() + JST_OFFSET_MS + offsetDays * DAY_MS).toISOString().slice(0, 10);
 }
 
-/** YYYY-MM-DD の翌日を返す。 */
-export function nextDate(day: string): string {
-	return new Date(Date.parse(day) + DAY_MS).toISOString().slice(0, 10);
+/** YYYY-MM-DD を days 日ずらした日を返す（1 で翌日、-1 で前日）。 */
+export function addDays(day: string, days: number): string {
+	return new Date(Date.parse(day) + days * DAY_MS).toISOString().slice(0, 10);
 }
 
 /** 2 つの YYYY-MM-DD の差（日数）を返す。 */

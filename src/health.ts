@@ -1,5 +1,5 @@
 import { Bindings } from './bindings';
-import { nextDate } from './date';
+import { addDays } from './date';
 
 /** 1 日分の体重の記録。date / time は記録したときの現地時刻。 */
 export interface WeightRecord {
@@ -148,7 +148,7 @@ async function getAccessToken(env: Bindings): Promise<string> {
 /** 指定した日（現地時刻）の data point をすべて取る。dataType は URL の kebab-case、filter では snake_case。 */
 async function fetchDataPoints(token: string, dataType: string, day: string): Promise<DataPoint[]> {
 	const filterField = dataType.replaceAll('-', '_');
-	const filter = `${filterField}.sample_time.civil_time >= "${day}" AND ${filterField}.sample_time.civil_time < "${nextDate(day)}"`;
+	const filter = `${filterField}.sample_time.civil_time >= "${day}" AND ${filterField}.sample_time.civil_time < "${addDays(day, 1)}"`;
 	const points: DataPoint[] = [];
 	let pageToken = '';
 	do {
