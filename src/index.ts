@@ -4,7 +4,7 @@ import { csrf } from 'hono/csrf';
 import health from './health';
 import { getJPYRate } from './fx';
 import { jstDate } from './date';
-import { buildComment, getDailyStatus, getErrorLogs, getStreak, getWeightWithContext, logError, runDaily } from './daily';
+import { getDailyStatus, getErrorLogs, getSavedComment, getStreak, getTodayWeight, logError, runDaily } from './daily';
 import { renderDashboard } from './dashboard';
 
 const app = new Hono<{ Bindings: Env }>();
@@ -78,7 +78,7 @@ app.get('/status', async (c) => {
 
 app.get('/weight', async (c) => {
 	try {
-		const { current } = await getWeightWithContext(c.env, jstDate(), false);
+		const current = await getTodayWeight(c.env, jstDate());
 		return c.json(current);
 	} catch (e) {
 		console.error('[weight]', e);
@@ -90,15 +90,17 @@ app.get('/', async (c) => {
 	const kv = c.env.FIT2BSKY_KV;
 	const day = jstDate();
 	const targetWeight = parseFloat(c.env.TARGET_WEIGHT);
-	const [status, errors, streakDays] = await Promise.all([getDailyStatus(kv, day), getErrorLogs(kv, day), getStreak(kv)]);
+	const [status, errors, streakDays, aiComment] = await Promise.all([
+		getDailyStatus(kv, day),
+		getErrorLogs(kv, day),
+		getStreak(kv),
+		getSavedComment(kv, day),
+	]);
 
 	let weight = null;
 	let weightError = null;
-	let aiComment = null;
 	try {
-		const { current, oneMonthAgo } = await getWeightWithContext(c.env, day);
-		weight = current;
-		aiComment = buildComment(c.env, current, oneMonthAgo, streakDays);
+		weight = await getTodayWeight(c.env, day);
 	} catch (e) {
 		// 表示のたびに取るので KV のエラーログには入れず、Workers Logs にだけ残す
 		console.error('[dashboard]', e);

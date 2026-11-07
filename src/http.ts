@@ -5,8 +5,8 @@ export const FETCH_TIMEOUT_MS = 10_000;
  * タイムアウトを付けた fetch。呼び出し側の signal（init か Request のもの）があれば、そちらも生かす。
  * fetch を差し替えられるライブラリ（@atproto/api の CredentialSession など）には、これを渡す。
  */
-export function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
-	const signals = [AbortSignal.timeout(FETCH_TIMEOUT_MS)];
+export function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit = {}, timeoutMs = FETCH_TIMEOUT_MS): Promise<Response> {
+	const signals = [AbortSignal.timeout(timeoutMs)];
 	const callerSignal = init.signal ?? (input instanceof Request ? input.signal : undefined);
 	if (callerSignal) {
 		signals.push(callerSignal);

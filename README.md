@@ -20,10 +20,13 @@ Cloudflare secretで以下の変数を設定しておく必要がある。（das
 - SHEET_ID
 - SHEET_NAME
 - GOOGLE_CREDENTIALS
+- ANTHROPIC_API_KEY（投稿に添えるコメントを Claude に作らせる）
 
 この一覧は `wrangler.jsonc` の `secrets.required` にもあり、未設定のものがあると deploy が止まる。
 
 また、Cloudflare KV も作成して wrangler.jsonc の設定を書き換える必要がある。BMI は体重と wrangler.jsonc の `HEIGHT_CM`（身長）から計算する。
+
+`ANTHROPIC_API_KEY` は、Claude Console で bot 専用のワークスペースを作り、月の利用額の上限を付けてから、そのワークスペースで発行する（Default ワークスペースには上限を付けられない）。キーが使えなくなっても投稿は止まらず、文例のコメントで投稿してエラーログに残る。期限付きのキーにしたときは、切れる前に `wrangler secret put ANTHROPIC_API_KEY` で入れ替える。
 
 Google Health API の OAuth クライアントは、Google Cloud で Google Health API を有効にしたうえで「ウェブアプリケーション」として作り、redirect URI に `<デプロイ先>/oauth/callback` を登録する。同意画面の公開状態が「テスト」のままだと refresh token が 7 日で切れるので、「本番」にする。
 

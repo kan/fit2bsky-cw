@@ -1,8 +1,7 @@
 import { createExecutionContext, createScheduledController, waitOnExecutionContext } from 'cloudflare:test';
 import { describe, expect, it, vi } from 'vitest';
 import worker from '../src/index';
-import { getErrorLogs } from '../src/daily';
-import { TODAY, filterDay, mockBluesky, mockDaily, oneWeight, testEnv } from './helpers';
+import { TODAY, errorLogs, filterDay, mockBluesky, mockDaily, oneWeight, testEnv } from './helpers';
 
 async function runCron(env: Env, cron = '0 0 * * *'): Promise<void> {
 	const ctrl = createScheduledController({ scheduledTime: Date.now(), cron });
@@ -12,8 +11,7 @@ async function runCron(env: Env, cron = '0 0 * * *'): Promise<void> {
 }
 
 async function errorContexts(env: Env, day = TODAY): Promise<string[]> {
-	const logs = (await getErrorLogs(env.FIT2BSKY_KV, day)) as { context: string }[] | null;
-	return (logs ?? []).map((l) => l.context);
+	return (await errorLogs(env, day)).map((l) => l.context);
 }
 
 describe('scheduled', () => {
@@ -77,7 +75,7 @@ describe('scheduled', () => {
 		await runCron(env);
 
 		// 今日（JST）と、その 30 日前
-		expect(requests.map(filterDay).sort()).toEqual(['2026-10-09', '2026-10-09', '2026-11-08', '2026-11-08']);
+		expect(requests.map(filterDay).sort()).toEqual(['2025-11-08', '2026-10-09', '2026-11-07', '2026-11-08', '2026-11-08']);
 		expect(writes[0].range).toBe('weight!D3842');
 		expect(await env.FIT2BSKY_KV.get('BSKY_POST_2026-11-08')).toBe('posted');
 		expect(await env.FIT2BSKY_KV.get('SHEET_WRITE_2026-11-08')).toBe('written');

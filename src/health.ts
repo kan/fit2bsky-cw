@@ -188,9 +188,13 @@ function formatCivilTime(civil: CivilDateTime): { date: string; time: string } {
 /**
  * 指定した日（JST、YYYY-MM-DD）の体重を取る。記録が無ければ例外を投げる。
  * 同期の遅れは、cron の再実行（12:00 / 21:00）で取り直す。
+ * withFat が false なら体脂肪率は取らず、fat を null にする（体重の差だけを使う過去の日）。
  */
-async function getWeight(env: Env, token: string, day: string): Promise<WeightRecord> {
-	const [weightPoints, fatPoints] = await Promise.all([fetchDataPoints(token, 'weight', day), fetchDataPoints(token, 'body-fat', day)]);
+async function getWeight(env: Env, token: string, day: string, { withFat = true } = {}): Promise<WeightRecord> {
+	const [weightPoints, fatPoints] = await Promise.all([
+		fetchDataPoints(token, 'weight', day),
+		withFat ? fetchDataPoints(token, 'body-fat', day) : [],
+	]);
 
 	const weight = latest(weightPoints.flatMap((p) => (p.weight ? [p.weight] : [])));
 	if (!weight) {

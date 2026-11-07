@@ -1,21 +1,7 @@
-import { createExecutionContext, waitOnExecutionContext } from 'cloudflare:test';
 import { http, HttpResponse } from 'msw';
 import { describe, expect, it, vi } from 'vitest';
-import worker from '../src/index';
 import { network } from './network';
-import { FX_URL, GOOGLE_TOKEN_URL, TODAY, filterDay, mockDaily, mockFx, mockHealth, oneWeight, testEnv } from './helpers';
-
-const BASE = 'https://fit2bsky.test';
-
-/** ダッシュボードのフォームと同じ、同じサイトからの POST */
-const FORM_POST: RequestInit = { method: 'POST', headers: { Origin: BASE, 'Content-Type': 'application/x-www-form-urlencoded' } };
-
-async function call(env: Env, path: string, init?: RequestInit): Promise<Response> {
-	const ctx = createExecutionContext();
-	const res = await worker.fetch(new Request(`${BASE}${path}`, init), env, ctx);
-	await waitOnExecutionContext(ctx);
-	return res;
-}
+import { FORM_POST, FX_URL, GOOGLE_TOKEN_URL, TODAY, call, filterDay, mockDaily, mockFx, mockHealth, oneWeight, testEnv } from './helpers';
 
 describe('GET /weight', () => {
 	it('最新の体重と体脂肪率を取り、BMI を身長から計算する', async () => {
@@ -82,8 +68,8 @@ describe('POST /post', () => {
 
 		expect(res.status).toBe(200);
 		expect(records[0]).toMatchObject({ $type: 'app.bsky.feed.post', langs: ['ja'] });
-		// AI コメントのために 30 日前の体重も取る
-		expect(requests.map(filterDay).sort()).toEqual(['2026-10-08', '2026-10-08', TODAY, TODAY]);
+		// AI コメントのために、1 年前、30 日前、前日の体重も取る（過去の日は体脂肪率を取らない）
+		expect(requests.map(filterDay).sort()).toEqual(['2025-11-07', '2026-10-08', '2026-11-06', TODAY, TODAY]);
 		expect(posts).toHaveLength(1);
 		expect(posts[0]).toContain('今日の体重: 134.0kg (BMI: 38.53) 体脂肪率: 33.03%');
 		expect(posts[0]).toContain('連続1日目 | 1$=150.3円');

@@ -32,6 +32,7 @@
 			"SHEET_ID",
 			"SHEET_NAME",
 			"GOOGLE_CREDENTIALS",
+			"ANTHROPIC_API_KEY",
 		],
 	},
 	"triggers": {

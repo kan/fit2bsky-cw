@@ -7,7 +7,10 @@ Fitbit で測定した体重データを Google Health API から取得し、Blu
 - **ランタイム**: Cloudflare Workers
 - **フレームワーク**: Hono
 - **言語**: TypeScript
-- **主な依存**: `@atproto/api`（Bluesky）、`jose`（シート書き込み用のサービスアカウントの JWT の署名。token との交換は `src/sheet.ts` が行う。Google Health の OAuth は `src/health.ts` が自前で行う）
+- **主な依存**:
+  - `@atproto/api`（Bluesky）
+  - `@anthropic-ai/sdk`（AI コメントの生成）
+  - `jose`（シート書き込み用のサービスアカウントの JWT の署名。token との交換は `src/sheet.ts` が行う。Google Health の OAuth は `src/health.ts` が自前で行う）
 
 ## ファイル構成
 
@@ -18,8 +21,8 @@ src/
 ├── dashboard.ts  # ダッシュボードのHTML（hono/html でエスケープ）
 ├── health.ts     # Google Health API連携（Google OAuth2、体重・体脂肪率の取得、BMIの計算）
 ├── date.ts       # JSTの日付の計算
-├── ai.ts         # 投稿に添えるAIコメントの選択
-├── comments.ts   # AIコメントの文例
+├── ai.ts         # 投稿に添えるAIコメントの生成（Claude のプロンプトと応答の検査）
+├── comments.ts   # AIコメントの文例（生成に失敗したときに使う）
 ├── bluesky.ts    # Bluesky投稿
 ├── sheet.ts      # Google Spreadsheet書き込み
 ├── fx.ts         # ドル円レート取得（Bitfinex API）
@@ -67,6 +70,16 @@ src/
 - 1 日 1 回のみ投稿（KV で `BSKY_POST_{date}` を管理）。KV は結果整合なので、cron の最中に手で `/post` を実行すると二重に投稿し得るが、個人用の bot なので許容している
 - `/post`エンドポイントでも投稿可能（未投稿の場合のみ）
 
+### AI コメント
+- 投稿の末尾の `AI「…」` は、Claude（モデルは `src/ai.ts` の `MODEL`）がその日の体重と、前日、1 か月前、
+  1 年前との差、目標までの残り、連続記録の日数から作る。モデルを選んだときの比較（Workers AI、OpenAI など）は #8 にある
+- 作るのは投稿するときだけで、1 日 1 回。作ったコメントは KV の `AI_COMMENT_{date}` に保存し、投稿の再試行と
+  ダッシュボードで使い回す。ダッシュボードは保存済みのものを表示するだけで、生成しない
+- 安全の判定で拒否されたときは、API が別のモデルで作り直す（server-side fallback、`fallbacks: 'default'`）
+- API のエラー、作り直しも含めた拒否、60 字超え、JSON でない応答のときは `src/comments.ts` の文例から選んで投稿し、
+  エラーログ（context は `ai_comment`）に残す。文例は投稿に成功したときだけ KV に保存する（投稿が失敗したら、
+  再試行のときに Claude で作り直す）
+
 ### シート書き込み
 - 1日1回のみ書き込み（KVで `SHEET_WRITE_{date}` を管理）
 - 全てのcron実行時に未書き込みであれば書き込みを試みる
@@ -102,6 +115,7 @@ src/
 | `SHEET_ID` | Google SpreadsheetのID |
 | `SHEET_NAME` | 書き込み先シート名 |
 | `GOOGLE_CREDENTIALS` | Google Service Account JSON |
+| `ANTHROPIC_API_KEY` | Claude API のキー。bot 専用のワークスペースで発行し、月の上限を付けておく |
 
 ## 開発コマンド
 
@@ -119,7 +133,7 @@ npm run typecheck     # 生成した型の鮮度、src と test の型を検査
 
 ## テスト
 
-`test/` は `@cloudflare/vitest-plugin` の上で動き、外部 API（Google Health、Bluesky、Sheets、Bitfinex）は
+`test/` は `@cloudflare/vitest-plugin` の上で動き、外部 API（Google Health、Bluesky、Sheets、Bitfinex、Claude）は
 `@msw/cloudflare` でモックする。ハンドラは `test/helpers.ts` の `mockHealth`、`mockDaily` などにまとめてある。
 `test/setup.ts` は受け皿のハンドラを初期のハンドラとして置く。モックの無いリクエストは本物へ出ず、
 599 が返る。`setupNetwork()` はハンドラの無いリクエストをそのまま本物へ通すので、この受け皿は外さない。
@@ -144,5 +158,6 @@ action の `uses:` は完全な版のタグ（`@v7.0.1`）で書き、実際に�
 | `BSKY_POST_{date}` | 24h | Bluesky投稿済みフラグ |
 | `SHEET_WRITE_{date}` | 24h | シート書き込み済みフラグ |
 | `ERROR_LOG_{date}` | 7日 | エラーログ（JSON配列） |
+| `AI_COMMENT_{date}` | 24h | その日の AI コメント |
 | `MEASUREMENT_STREAK` | なし | 連続記録の日数 |
 | `LAST_MEASUREMENT_DATE` | なし | 連続記録を最後に数えた日 |

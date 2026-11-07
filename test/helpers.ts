@@ -1,7 +1,28 @@
+import { createExecutionContext, waitOnExecutionContext } from 'cloudflare:test';
 import { env } from 'cloudflare:workers';
 import { jwtVerify } from 'jose';
 import { http, HttpResponse } from 'msw';
+import worker from '../src/index';
+import { getErrorLogs } from '../src/daily';
 import { network } from './network';
+
+const BASE = 'https://fit2bsky.test';
+
+/** ダッシュボードのフォームと同じ、同じサイトからの POST */
+export const FORM_POST: RequestInit = { method: 'POST', headers: { Origin: BASE, 'Content-Type': 'application/x-www-form-urlencoded' } };
+
+/** worker の fetch を呼び、waitUntil に渡した処理まで待つ */
+export async function call(env: Env, path: string, init?: RequestInit): Promise<Response> {
+	const ctx = createExecutionContext();
+	const res = await worker.fetch(new Request(`${BASE}${path}`, init), env, ctx);
+	await waitOnExecutionContext(ctx);
+	return res;
+}
+
+/** その日のエラーログ。無ければ空の配列 */
+export async function errorLogs(env: Env, day = TODAY): Promise<{ context: string; error: string }[]> {
+	return ((await getErrorLogs(env.FIT2BSKY_KV, day)) as { context: string; error: string }[] | null) ?? [];
+}
 
 // src の定数は import しない。URL を書き間違えたとき、テストで気づけるようにするため
 const HEALTH_API = 'https://health.googleapis.com/v4/users/me';
@@ -12,6 +33,7 @@ const BSKY = 'https://bsky.social/xrpc';
 const SHEETS_API = 'https://sheets.googleapis.com/v4/spreadsheets';
 export const FX_URL = 'https://api-pub.bitfinex.com/v2/calc/fx';
 const SA_EMAIL = 'sheet@test.iam.gserviceaccount.com';
+const CLAUDE_URL = 'https://api.anthropic.com/v1/messages';
 
 /** setup.ts が固定する時刻の、JST の日付 */
 export const TODAY = '2026-11-07';
@@ -58,6 +80,7 @@ export async function testEnv(): Promise<Env> {
 		SHEET_ID: 'sheet-id',
 		SHEET_NAME: 'weight',
 		GOOGLE_CREDENTIALS: serviceAccount.json,
+		ANTHROPIC_API_KEY: 'anthropic-key',
 	};
 }
 
@@ -183,11 +206,56 @@ export function mockFx(rate = 150.25) {
 	network.use(http.post(FX_URL, () => HttpResponse.json([rate])));
 }
 
-/** その日の処理に要る外部 API（体重、Bluesky、シート、為替）をまとめて用意する。為替は mockFx の既定の 150.25 */
+export const CLAUDE_COMMENT = '測るだけで痩せるなら苦労はしませんね';
+
+/**
+ * Claude の Messages API。messages に送られたリクエストの本文がたまる。
+ * reply で応答を差し替える（既定は CLAUDE_COMMENT を JSON で返す）。
+ */
+export function mockClaude(
+	reply: (body: Record<string, unknown>) => Response = () => claudeText(JSON.stringify({ comment: CLAUDE_COMMENT })),
+) {
+	const messages: Record<string, unknown>[] = [];
+	network.use(
+		http.post(CLAUDE_URL, async ({ request }) => {
+			// SDK 1.x は API キーを Authorization ヘッダーで送る
+			if (request.headers.get('authorization') !== 'Bearer anthropic-key') {
+				return HttpResponse.json({ type: 'error', error: { type: 'authentication_error', message: 'invalid x-api-key' } }, { status: 401 });
+			}
+			if (!request.headers.get('anthropic-beta')?.includes('server-side-fallback-2026-07-01')) {
+				return HttpResponse.json(
+					{ type: 'error', error: { type: 'invalid_request_error', message: 'fallbacks needs the beta header' } },
+					{ status: 400 },
+				);
+			}
+			const body = (await request.json()) as Record<string, unknown>;
+			messages.push(body);
+			return reply(body);
+		}),
+	);
+	return { messages };
+}
+
+/** Messages API の応答。text を 1 つの text ブロックで返す */
+export function claudeText(text: string, stopReason = 'end_turn'): Response {
+	return HttpResponse.json({
+		id: 'msg_test',
+		type: 'message',
+		role: 'assistant',
+		model: 'claude-opus-5-5',
+		content: [{ type: 'text', text }],
+		stop_reason: stopReason,
+		stop_sequence: null,
+		usage: { input_tokens: 1000, output_tokens: 50 },
+	});
+}
+
+/** その日の処理に要る外部 API（体重、Bluesky、シート、為替、Claude）をまとめて用意する。為替は mockFx の既定の 150.25 */
 export function mockDaily(byDay: Parameters<typeof mockHealth>[0] = oneWeight(), { bskyFail = false } = {}) {
 	const { requests, tokenRequests } = mockHealth(byDay);
 	const { posts, records } = mockBluesky({ fail: bskyFail });
 	const { writes } = mockSheet();
 	mockFx();
-	return { requests, tokenRequests, posts, records, writes };
+	const { messages } = mockClaude();
+	return { requests, tokenRequests, posts, records, writes, messages };
 }
