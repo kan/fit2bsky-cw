@@ -1,0 +1,40 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "fit2bsky-cw",
+	"main": "src/index.ts",
+	// 上げるときは npm test と wrangler deploy --dry-run で挙動の差を確かめる
+	"compatibility_date": "2026-10-23",
+	"compatibility_flags": ["nodejs_compat"],
+	"upload_source_maps": true,
+	// Workers Logs。cron の実行と console.log / console.error も記録される
+	"observability": {
+		"enabled": true,
+	},
+	"kv_namespaces": [
+		{
+			"binding": "FIT2BSKY_KV",
+			"id": "6b63fe49f27f429da0e7836a07fc73e3",
+			"preview_id": "63bfdea453d0471ca546f84865d574e8",
+		},
+	],
+	"vars": {
+		"TARGET_WEIGHT": "120.0",
+		// BMI の計算に使う身長（cm）。Google Health API には BMI のデータ型が無い
+		"HEIGHT_CM": "186.5",
+	},
+	// deploy の時点で、これらが設定されているかを検査する。wrangler types の Env にも入る
+	"secrets": {
+		"required": [
+			"GOOGLE_HEALTH_CLIENT_ID",
+			"GOOGLE_HEALTH_CLIENT_SECRET",
+			"BSKY_HANDLE",
+			"BSKY_PASSWORD",
+			"SHEET_ID",
+			"SHEET_NAME",
+			"GOOGLE_CREDENTIALS",
+		],
+	},
+	"triggers": {
+		"crons": ["0 0 * * *", "0 3 * * *", "0 12 * * *"],
+	},
+}

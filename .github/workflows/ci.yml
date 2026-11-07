@@ -1,6 +1,6 @@
 name: CI
 
-# lint、フォーマットの検査、テスト（@cloudflare/vitest-plugin）を回す。Dependabot の npm の PR も
+# lint、フォーマットの検査、型検査、テスト（@cloudflare/vitest-plugin）を回す。Dependabot の npm の PR も
 # ここを通るので、壊れる更新はマージ前に落ちる。デプロイ（wrangler deploy）は CI に入れず、手元で行う。
 on:
   push:
@@ -25,5 +25,7 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm run format:check
+      # worker-configuration.d.ts が wrangler.jsonc と合っているか、src と test の型を検査する
+      - run: npm run typecheck
       # npm test は vitest の watch モードなので、一度だけ流す
       - run: npm test -- --run

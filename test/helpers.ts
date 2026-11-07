@@ -1,6 +1,5 @@
 import { env } from 'cloudflare:workers';
 import { http, HttpResponse } from 'msw';
-import { Bindings } from '../src/bindings';
 import { network } from './network';
 
 // src の定数は import しない。URL を書き間違えたとき、テストで気づけるようにするため
@@ -42,13 +41,12 @@ async function makeServiceAccount(): Promise<string> {
 
 let serviceAccount: string | null = null;
 
-/** wrangler.toml の vars に、テスト用の secret を足した env。KV は本物（テストごとに reset される）。 */
-export async function testEnv(): Promise<Bindings> {
+/** wrangler.jsonc の vars に、テスト用の secret を足した env。KV は本物（テストごとに reset される）。 */
+export async function testEnv(): Promise<Env> {
 	serviceAccount ??= await makeServiceAccount();
-	const e = env as unknown as Bindings;
-	await e.FIT2BSKY_KV.put('GOOGLE_HEALTH_REFRESH_TOKEN', 'refresh-token');
+	await env.FIT2BSKY_KV.put('GOOGLE_HEALTH_REFRESH_TOKEN', 'refresh-token');
 	return {
-		...e,
+		...env,
 		GOOGLE_HEALTH_CLIENT_ID: 'client-id',
 		GOOGLE_HEALTH_CLIENT_SECRET: 'client-secret',
 		BSKY_HANDLE: 'test.bsky.social',

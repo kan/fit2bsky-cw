@@ -1,18 +1,17 @@
 import { createExecutionContext, createScheduledController, waitOnExecutionContext } from 'cloudflare:test';
 import { describe, expect, it, vi } from 'vitest';
 import worker from '../src/index';
-import { Bindings } from '../src/bindings';
 import { getErrorLogs } from '../src/daily';
 import { TODAY, filterDay, mockBluesky, mockDaily, oneWeight, testEnv } from './helpers';
 
-async function runCron(env: Bindings, cron = '0 0 * * *'): Promise<void> {
+async function runCron(env: Env, cron = '0 0 * * *'): Promise<void> {
 	const ctrl = createScheduledController({ scheduledTime: Date.now(), cron });
 	const ctx = createExecutionContext();
 	await worker.scheduled(ctrl, env, ctx);
 	await waitOnExecutionContext(ctx);
 }
 
-async function errorContexts(env: Bindings, day = TODAY): Promise<string[]> {
+async function errorContexts(env: Env, day = TODAY): Promise<string[]> {
 	const logs = (await getErrorLogs(env.FIT2BSKY_KV, day)) as { context: string }[] | null;
 	return (logs ?? []).map((l) => l.context);
 }

@@ -21,7 +21,9 @@ Cloudflare secretで以下の変数を設定しておく必要がある。（das
 - SHEET_NAME
 - GOOGLE_CREDENTIALS
 
-また、Cloudflare KV も作成して wrangler.toml の設定を書き換える必要がある。BMI は体重と wrangler.toml の `HEIGHT_CM`（身長）から計算する。
+この一覧は `wrangler.jsonc` の `secrets.required` にもあり、未設定のものがあると deploy が止まる。
+
+また、Cloudflare KV も作成して wrangler.jsonc の設定を書き換える必要がある。BMI は体重と wrangler.jsonc の `HEIGHT_CM`（身長）から計算する。
 
 Google Health API の OAuth クライアントは、Google Cloud で Google Health API を有効にしたうえで「ウェブアプリケーション」として作り、redirect URI に `<デプロイ先>/oauth/callback` を登録する。同意画面の公開状態が「テスト」のままだと refresh token が 7 日で切れるので、「本番」にする。
 
@@ -80,5 +82,6 @@ npm run dev           # ローカル開発サーバー
 npm run deploy        # デプロイ
 npm test              # テスト実行
 npm run lint          # ESLintチェック
+npm run typecheck     # 型検査
 npm run format        # Prettierフォーマット
 ```

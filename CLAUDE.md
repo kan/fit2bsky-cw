@@ -22,9 +22,14 @@ src/
 ├── comments.ts   # AIコメントの文例
 ├── bluesky.ts    # Bluesky投稿
 ├── sheet.ts      # Google Spreadsheet書き込み
-├── fx.ts         # ドル円レート取得（Bitfinex API）
-└── bindings.d.ts # 環境変数の型定義
+└── fx.ts         # ドル円レート取得（Bitfinex API）
 ```
+
+環境変数の型は、`wrangler.jsonc` から `npm run cf-typegen`（`wrangler types --strict-vars=false`）で生成した
+`worker-configuration.d.ts` のグローバルな `Env` を使う。`Env` を手で書かない。生成したファイルは commit し、
+`wrangler.jsonc` を変えたら作り直す（CI の `npm run typecheck` が `wrangler types --check` で検査する）。
+`--check` は生成に使った workerd の版も比べるので、wrangler を上げる Dependabot の PR は CI が落ちる。
+その PR のブランチで `npm run cf-typegen` を実行し、`worker-configuration.d.ts` を commit して直す。
 
 ## エンドポイント
 
@@ -65,10 +70,14 @@ src/
 ### エラーハンドリング
 - エラーはKVに `ERROR_LOG_{date}` として7日間保存
 - `/errors`エンドポイントで確認可能
+- 同じエラーを `console.error` にも出す。Workers Logs（`wrangler.jsonc` の `observability`）に cron の実行と合わせて残る。
+  ダッシュボードのエラー件数と `/status` の `hasErrors` は KV の方を読む
+- `/fx`、`/weight`、ダッシュボードでの体重の取得の失敗は、`console.error` だけに出す（ダッシュボードは表示のたびに
+  体重を取るので、KV に入れると件数が膨らむ）
 
 ## 環境変数
 
-### wrangler.toml で設定
+### wrangler.jsonc の vars で設定
 
 | 変数名 | 説明 |
 |--------|------|
@@ -76,6 +85,8 @@ src/
 | `HEIGHT_CM` | 身長（cm）。BMI の計算に使う |
 
 ### Cloudflare Secrets で設定
+
+名前は `wrangler.jsonc` の `secrets.required` にも並べてある。deploy の時点で未設定のものがあれば止まる。
 
 | 変数名 | 説明 |
 |--------|------|
@@ -97,7 +108,8 @@ npm run lint          # ESLintチェック
 npm run lint:fix      # ESLint自動修正
 npm run format        # Prettierフォーマット
 npm run format:check  # フォーマットチェック
-npm run cf-typegen    # Cloudflare型定義生成
+npm run cf-typegen    # Cloudflare型定義生成（worker-configuration.d.ts）
+npm run typecheck     # 生成した型の鮮度、src と test の型を検査
 ```
 
 ## テスト
@@ -111,7 +123,7 @@ KV は各テストの後で `reset()` して空にする。`setup.ts` は時刻�
 
 ## CI
 
-`.github/workflows/ci.yml` が main への push と PR で `lint`、`format:check`、テスト（`npm test -- --run`）を回す。
+`.github/workflows/ci.yml` が main への push と PR で `lint`、`format:check`、テスト（`npm test -- --run`）と `typecheck` を回す。
 デプロイは CI に入れず、手元で `npm run deploy` する。依存の更新は Dependabot（`.github/dependabot.yml`）が
 npm と GitHub Actions のそれぞれで週に 1 度、1 本の PR にまとめて出す。
 

@@ -3,7 +3,6 @@ import bluesky from './bluesky';
 import sheet from './sheet';
 import { getJPYRate } from './fx';
 import { generateComment } from './ai';
-import { Bindings } from './bindings';
 import { addDays, jstDate } from './date';
 
 const BSKY_POST_KEY_PREFIX = 'BSKY_POST_';
@@ -16,13 +15,17 @@ export async function getErrorLogs(kv: KVNamespace, day: string): Promise<unknow
 	return kv.get<unknown[]>(`${ERROR_LOG_KEY_PREFIX}${day}`, 'json');
 }
 
+/** エラーを Workers Logs（console.error）と KV に残す。KV の方はダッシュボードと /errors が読む。 */
 export async function logError(kv: KVNamespace, context: string, error: unknown): Promise<void> {
+	// Error をそのまま渡すと、Workers Logs にスタックトレースが残る
+	console.error(`[${context}]`, error);
+	const message = error instanceof Error ? error.message : String(error);
 	const key = `${ERROR_LOG_KEY_PREFIX}${jstDate()}`;
 	const logs = (await kv.get<unknown[]>(key, 'json')) ?? [];
 	logs.push({
 		timestamp: new Date().toISOString(),
 		context,
-		error: error instanceof Error ? error.message : String(error),
+		error: message,
 	});
 	await kv.put(key, JSON.stringify(logs), { expirationTtl: 86400 * 7 });
 }
@@ -69,7 +72,7 @@ AI「${aiComment}」`;
  * withContext が false なら 1 か月前は取らない（シートへの書き込みだけのとき）。
  */
 export async function getWeightWithContext(
-	env: Bindings,
+	env: Env,
 	day: string,
 	withContext = true,
 ): Promise<{ current: WeightRecord; oneMonthAgo: WeightRecord | null }> {
@@ -82,7 +85,7 @@ export async function getWeightWithContext(
 }
 
 /** 投稿とダッシュボードに出す AI コメントを作る。 */
-export function buildComment(env: Bindings, current: WeightRecord, oneMonthAgo: WeightRecord | null, streakDays: number): string {
+export function buildComment(env: Env, current: WeightRecord, oneMonthAgo: WeightRecord | null, streakDays: number): string {
 	return generateComment({ current, oneMonthAgo, targetWeight: parseFloat(env.TARGET_WEIGHT), streakDays });
 }
 
@@ -96,7 +99,7 @@ export interface DailyResult {
  * その日のシートへの書き込みと（post が true なら）投稿を、まだ済んでいないものだけ行う。
  * cron と手動の実行で共有する。logPrefix はエラーログの context の頭に付け、cron と手動の実行を見分ける。
  */
-export async function runDaily(env: Bindings, { post }: { post: boolean }, logPrefix = ''): Promise<DailyResult> {
+export async function runDaily(env: Env, { post }: { post: boolean }, logPrefix = ''): Promise<DailyResult> {
 	const messages: string[] = [];
 	try {
 		const ok = await runDailyTasks(env, post, logPrefix, messages);
@@ -109,7 +112,7 @@ export async function runDaily(env: Bindings, { post }: { post: boolean }, logPr
 	}
 }
 
-async function runDailyTasks(env: Bindings, post: boolean, logPrefix: string, messages: string[]): Promise<boolean> {
+async function runDailyTasks(env: Env, post: boolean, logPrefix: string, messages: string[]): Promise<boolean> {
 	const kv = env.FIT2BSKY_KV;
 	const day = jstDate();
 	const status = await getDailyStatus(kv, day);

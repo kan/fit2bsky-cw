@@ -2,7 +2,6 @@ import { createExecutionContext, waitOnExecutionContext } from 'cloudflare:test'
 import { http, HttpResponse } from 'msw';
 import { describe, expect, it, vi } from 'vitest';
 import worker from '../src/index';
-import { Bindings } from '../src/bindings';
 import { network } from './network';
 import { FX_URL, GOOGLE_TOKEN_URL, TODAY, filterDay, mockDaily, mockFx, mockHealth, oneWeight, testEnv } from './helpers';
 
@@ -11,7 +10,7 @@ const BASE = 'https://fit2bsky.test';
 /** ダッシュボードのフォームと同じ、同じサイトからの POST */
 const FORM_POST: RequestInit = { method: 'POST', headers: { Origin: BASE, 'Content-Type': 'application/x-www-form-urlencoded' } };
 
-async function call(env: Bindings, path: string, init?: RequestInit): Promise<Response> {
+async function call(env: Env, path: string, init?: RequestInit): Promise<Response> {
 	const ctx = createExecutionContext();
 	const res = await worker.fetch(new Request(`${BASE}${path}`, init), env, ctx);
 	await waitOnExecutionContext(ctx);
@@ -34,7 +33,7 @@ describe('GET /weight', () => {
 		expect(res.status).toBe(200);
 		const data = (await res.json()) as Record<string, unknown>;
 		expect(data).toMatchObject({ date: TODAY, time: '07:48:44', weight: 134, fat: 33.028 });
-		// HEIGHT_CM = 186.5（wrangler.toml）
+		// HEIGHT_CM = 186.5（wrangler.jsonc）
 		expect(data.bmi).toBeCloseTo(134 / 1.865 ** 2, 5);
 	});
 

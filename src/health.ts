@@ -1,4 +1,3 @@
-import { Bindings } from './bindings';
 import { addDays } from './date';
 
 /** 1 日分の体重の記録。date / time は記録したときの現地時刻。 */
@@ -78,7 +77,7 @@ async function throwResponseError(label: string, res: Response): Promise<never> 
 	throw Error(`${label}: ${reason ?? 'unknown'}${hint} status=${res.status} msg=${body}`);
 }
 
-function getAuthURL(env: Bindings, url: string, state: string): string {
+function getAuthURL(env: Env, url: string, state: string): string {
 	const query = new URLSearchParams({
 		response_type: 'code',
 		client_id: env.GOOGLE_HEALTH_CLIENT_ID,
@@ -91,7 +90,7 @@ function getAuthURL(env: Bindings, url: string, state: string): string {
 	return `${AUTH_URL}?${query.toString()}`;
 }
 
-async function requestToken(env: Bindings, params: Record<string, string>): Promise<TokenResponse> {
+async function requestToken(env: Env, params: Record<string, string>): Promise<TokenResponse> {
 	const res = await fetch(TOKEN_URL, {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -108,7 +107,7 @@ async function requestToken(env: Bindings, params: Record<string, string>): Prom
 }
 
 /** 認可コードを token に替え、refresh token を保存する。Google Health への連携も確かめる。 */
-async function exchangeCode(env: Bindings, url: string, code: string): Promise<void> {
+async function exchangeCode(env: Env, url: string, code: string): Promise<void> {
 	const data = await requestToken(env, {
 		grant_type: 'authorization_code',
 		redirect_uri: callbackUrl(url),
@@ -129,7 +128,7 @@ async function exchangeCode(env: Bindings, url: string, code: string): Promise<v
 }
 
 /** 保存した refresh token から access token を取る。1 回の実行の中ではこれを使い回す。 */
-async function getAccessToken(env: Bindings): Promise<string> {
+async function getAccessToken(env: Env): Promise<string> {
 	const refreshToken = await env.FIT2BSKY_KV.get(REFRESH_TOKEN_KEY);
 	if (!refreshToken) {
 		throw Error("Can't get refresh token: 未認証。/auth を開く");
@@ -193,7 +192,7 @@ function formatCivilTime(civil: CivilDateTime): { date: string; time: string } {
  * 指定した日（JST、YYYY-MM-DD）の体重を取る。記録が無ければ例外を投げる。
  * 同期の遅れは、cron の再実行（12:00 / 21:00）で取り直す。
  */
-async function getWeight(env: Bindings, token: string, day: string): Promise<WeightRecord> {
+async function getWeight(env: Env, token: string, day: string): Promise<WeightRecord> {
 	const [weightPoints, fatPoints] = await Promise.all([fetchDataPoints(token, 'weight', day), fetchDataPoints(token, 'body-fat', day)]);
 
 	const weight = latest(weightPoints.flatMap((p) => (p.weight ? [p.weight] : [])));

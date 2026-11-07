@@ -3,12 +3,11 @@ import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { csrf } from 'hono/csrf';
 import health from './health';
 import { getJPYRate } from './fx';
-import { Bindings } from './bindings';
 import { jstDate } from './date';
 import { buildComment, getDailyStatus, getErrorLogs, getStreak, getWeightWithContext, logError, runDaily } from './daily';
 import { renderDashboard } from './dashboard';
 
-const app = new Hono<{ Bindings: Bindings }>();
+const app = new Hono<{ Bindings: Env }>();
 
 const OAUTH_STATE_COOKIE = 'oauth_state';
 
@@ -61,6 +60,7 @@ app.get('/fx', async (c) => {
 		const jpy = await getJPYRate();
 		return c.text(`${jpy.toFixed(1)}円`);
 	} catch (e) {
+		console.error('[fx]', e);
 		return c.text('Error: ' + e, 500);
 	}
 });
@@ -81,6 +81,7 @@ app.get('/weight', async (c) => {
 		const { current } = await getWeightWithContext(c.env, jstDate(), false);
 		return c.json(current);
 	} catch (e) {
+		console.error('[weight]', e);
 		return c.text('Error: ' + e, 500);
 	}
 });
@@ -99,6 +100,8 @@ app.get('/', async (c) => {
 		weight = current;
 		aiComment = buildComment(c.env, current, oneMonthAgo, streakDays);
 	} catch (e) {
+		// 表示のたびに取るので KV のエラーログには入れず、Workers Logs にだけ残す
+		console.error('[dashboard]', e);
 		weightError = e instanceof Error ? e.message : String(e);
 	}
 
@@ -107,7 +110,7 @@ app.get('/', async (c) => {
 	);
 });
 
-const scheduled: ExportedHandlerScheduledHandler<Bindings> = async (_event, env) => {
+const scheduled: ExportedHandlerScheduledHandler<Env> = async (_event, env) => {
 	await runDaily(env, { post: true }, 'scheduled_');
 };
 

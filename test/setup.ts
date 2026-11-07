@@ -15,10 +15,13 @@ beforeAll(() => {
 beforeEach(() => {
 	// JST 2026-11-07 09:00（UTC 0:00 の cron の時刻）。テストの中で vi.setSystemTime() でずらせる
 	vi.useFakeTimers({ now: new Date('2026-11-07T00:00:00Z'), toFake: ['Date'] });
+	// エラーの経路を通すテストが多く、出力が本当の失敗の表示に混ざるので黙らせる
+	vi.spyOn(console, 'error').mockImplementation(() => {});
 });
 
 afterEach(async () => {
 	vi.useRealTimers();
+	vi.restoreAllMocks();
 	network.resetHandlers();
 	await reset();
 });

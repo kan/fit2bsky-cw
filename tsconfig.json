@@ -32,8 +32,9 @@
 		// "rootDirs": [],                                   /* Allow multiple folders to be treated as one when resolving modules. */
 		// "typeRoots": [],                                  /* Specify multiple folders that act like `./node_modules/@types`. */
 		"types": [
-			"@cloudflare/workers-types"
-		] /* Specify type package names to be included without being referenced in a source file. */,
+			"./worker-configuration.d.ts",
+			"node"
+		] /* wrangler types で生成した型。wrangler.jsonc を変えたら npm run cf-typegen で作り直す */,
 		// "allowUmdGlobalAccess": true,                     /* Allow accessing UMD globals from modules. */
 		"resolveJsonModule": true /* Enable importing .json files */,
 		// "noResolve": true,                                /* Disallow `import`s, `require`s or `<reference>`s from expanding the number of files TypeScript should add to a project. */

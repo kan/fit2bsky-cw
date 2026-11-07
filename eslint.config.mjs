@@ -13,6 +13,9 @@ export default [
 			parserOptions: {
 				ecmaVersion: 'latest',
 				sourceType: 'module',
+				// no-floating-promises が型の情報を使う。各ファイルは最寄りの tsconfig.json で解析する
+				projectService: true,
+				tsconfigRootDir: import.meta.dirname,
 			},
 		},
 		plugins: {
@@ -22,7 +25,10 @@ export default [
 			...tseslint.configs.recommended.rules,
 			'@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
 			'@typescript-eslint/no-explicit-any': 'warn',
-			'no-console': 'warn',
+			// await し忘れた Promise は、Worker の実行が終わると打ち切られる
+			'@typescript-eslint/no-floating-promises': 'error',
+			// console.error は Workers Logs に残すために使う
+			'no-console': ['warn', { allow: ['error'] }],
 		},
 	},
 ];

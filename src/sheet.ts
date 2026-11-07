@@ -1,9 +1,8 @@
 import { getAccessToken } from 'web-auth-library/google';
-import { Bindings } from './bindings';
 import { daysBetween } from './date';
 
 /** day（JST、YYYY-MM-DD）の行に体重を書き込む。 */
-async function Update(env: Bindings, day: string, value: number): Promise<void> {
+async function Update(env: Env, day: string, value: number): Promise<void> {
 	const token = await getAccessToken({
 		credentials: env.GOOGLE_CREDENTIALS,
 		scope: 'https://www.googleapis.com/auth/spreadsheets',
