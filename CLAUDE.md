@@ -100,6 +100,15 @@ npm run format:check  # フォーマットチェック
 npm run cf-typegen    # Cloudflare型定義生成
 ```
 
+## テスト
+
+`test/` は `@cloudflare/vitest-plugin` の上で動き、外部 API（Google Health、Bluesky、Sheets、Bitfinex）は
+`@msw/cloudflare` でモックする。ハンドラは `test/helpers.ts` の `mockHealth`、`mockDaily` などにまとめてある。
+`test/setup.ts` は受け皿のハンドラを初期のハンドラとして置く。モックの無いリクエストは本物へ出ず、
+599 が返る。`setupNetwork()` はハンドラの無いリクエストをそのまま本物へ通すので、この受け皿は外さない。
+KV は各テストの後で `reset()` して空にする。`setup.ts` は時刻も JST 2026-11-07 9:00 で固定する
+（`vi.useFakeTimers({ toFake: ['Date'] })`）。別の時刻が要るテストは `vi.setSystemTime()` でずらす。
+
 ## CI
 
 `.github/workflows/ci.yml` が main への push と PR で `lint`、`format:check`、テスト（`npm test -- --run`）を回す。
