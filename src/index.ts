@@ -1,10 +1,12 @@
 import { Hono } from 'hono';
-import fitbit, { FitbitWeight } from './fitbit';
+import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
+import health, { WeightRecord } from './health';
 import bluesky from './bluesky';
 import sheet from './sheet';
 import { getJPYRate } from './fx';
 import { generateComment, WeightContext } from './ai';
 import { Bindings } from './bindings';
+import { jstDate } from './date';
 
 const app = new Hono<{ Bindings: Bindings }>();
 
@@ -13,9 +15,10 @@ const SHEET_WRITE_KEY_PREFIX = 'SHEET_WRITE_';
 const ERROR_LOG_KEY_PREFIX = 'ERROR_LOG_';
 const STREAK_KEY = 'MEASUREMENT_STREAK';
 const LAST_MEASUREMENT_KEY = 'LAST_MEASUREMENT_DATE';
+const OAUTH_STATE_COOKIE = 'oauth_state';
 
 function getToday(): string {
-	return new Date().toISOString().split('T')[0];
+	return jstDate();
 }
 
 async function logError(kv: KVNamespace, context: string, error: unknown): Promise<void> {
@@ -65,11 +68,7 @@ async function updateStreak(kv: KVNamespace): Promise<number> {
 		return streak;
 	}
 
-	const yesterday = new Date();
-	yesterday.setDate(yesterday.getDate() - 1);
-	const yesterdayStr = yesterday.toISOString().split('T')[0];
-
-	if (lastDate === yesterdayStr) {
+	if (lastDate === jstDate(-1)) {
 		streak += 1;
 	} else {
 		streak = 1;
@@ -81,55 +80,64 @@ async function updateStreak(kv: KVNamespace): Promise<number> {
 	return streak;
 }
 
-function getDateNDaysAgo(days: number): Date {
-	const date = new Date();
-	date.setDate(date.getDate() - days);
-	return date;
+function formatFat(fat: number | null): string {
+	return fat !== null ? `${fat.toFixed(2)}%` : '-';
 }
 
-function formatPostMessage(weight: FitbitWeight, streakDays: number, jpy: number, aiComment: string): string {
-	return `今日の体重: ${weight.weight.toFixed(1)}kg (BMI: ${weight.bmi.toFixed(2)}) 体脂肪率: ${weight.fat.toFixed(2)}%
+function formatPostMessage(weight: WeightRecord, streakDays: number, jpy: number, aiComment: string): string {
+	return `今日の体重: ${weight.weight.toFixed(1)}kg (BMI: ${weight.bmi.toFixed(2)}) 体脂肪率: ${formatFat(weight.fat)}
 連続${streakDays}日目 | 1$=${jpy.toFixed(1)}円
 
 AI「${aiComment}」`;
 }
 
-async function getWeightSafe(env: Bindings, url: string, date: Date): Promise<FitbitWeight | null> {
-	try {
-		return await fitbit.GetWeight(env, url, date);
-	} catch {
-		return null;
-	}
-}
-
-async function buildWeightContext(env: Bindings, url: string, current: FitbitWeight, streakDays: number): Promise<WeightContext> {
-	const oneYearAgo = await getWeightSafe(env, url, getDateNDaysAgo(365));
-	const oneMonthAgo = await getWeightSafe(env, url, getDateNDaysAgo(30));
+async function buildWeightContext(env: Bindings, token: string, current: WeightRecord, streakDays: number): Promise<WeightContext> {
+	const oneMonthAgo = await health.getWeight(env, token, jstDate(-30)).catch(() => null);
 	const targetWeight = parseFloat(env.TARGET_WEIGHT);
 
 	return {
 		current,
-		oneYearAgo,
 		oneMonthAgo,
 		targetWeight,
 		streakDays,
 	};
 }
 
+/** access token を 1 回だけ取り、今日の体重を取る。token は続く取得で使い回し、day はシートの行に使う。 */
+async function getTodayWeight(env: Bindings): Promise<{ token: string; day: string; data: WeightRecord }> {
+	const day = getToday();
+	const token = await health.getAccessToken(env);
+	const data = await health.getWeight(env, token, day);
+	return { token, day, data };
+}
+
 app.get('/auth', (c) => {
-	return c.redirect(fitbit.GetAuthURL(c.env, c.req.url));
+	const state = crypto.randomUUID();
+	setCookie(c, OAUTH_STATE_COOKIE, state, { path: '/oauth', httpOnly: true, secure: true, sameSite: 'Lax', maxAge: 600 });
+	return c.redirect(health.getAuthURL(c.env, c.req.url, state));
 });
 
 app.get('/oauth/callback', async (c) => {
+	const expectedState = getCookie(c, OAUTH_STATE_COOKIE);
+	deleteCookie(c, OAUTH_STATE_COOKIE, { path: '/oauth' });
+	if (!expectedState || c.req.query('state') !== expectedState) {
+		return c.text('state が一致しません。/auth からやり直してください', 400);
+	}
+
+	const error = c.req.query('error');
+	if (error) {
+		return c.text(`認可されませんでした: ${error}`, 400);
+	}
 	const code = c.req.query('code');
 	if (!code) {
 		return c.text('認証コードを取得できませんでした', 400);
 	}
 
 	try {
-		await fitbit.SetAccessToken(c.env, c.req.url, code);
-		return c.text('fitbitアクセストークンを取得しました');
+		await health.exchangeCode(c.env, c.req.url, code);
+		return c.text('Google Health の refresh token を保存しました');
 	} catch (e) {
+		await logError(c.env.FIT2BSKY_KV, 'oauth_callback', e);
 		return c.text('Error: ' + e, 500);
 	}
 });
@@ -138,7 +146,7 @@ app.get('/post', async (c) => {
 	const results: string[] = [];
 
 	try {
-		const data = await fitbit.GetWeight(c.env, c.req.url, new Date());
+		const { token, day, data } = await getTodayWeight(c.env);
 		const streakDays = await updateStreak(c.env.FIT2BSKY_KV);
 
 		// Bluesky投稿（未投稿の場合のみ）
@@ -147,7 +155,7 @@ app.get('/post', async (c) => {
 		} else {
 			try {
 				const jpy = await getJPYRate();
-				const context = await buildWeightContext(c.env, c.req.url, data, streakDays);
+				const context = await buildWeightContext(c.env, token, data, streakDays);
 				const aiComment = generateComment(context);
 				const msg = formatPostMessage(data, streakDays, jpy, aiComment);
 				await bluesky.postMessage(c.env, msg);
@@ -165,7 +173,7 @@ app.get('/post', async (c) => {
 			results.push('Sheet: 本日は書き込み済みです');
 		} else {
 			try {
-				await sheet.Update(c.env, data.weight);
+				await sheet.Update(c.env, day, data.weight);
 				await markSheetWritten(c.env.FIT2BSKY_KV);
 				results.push('Sheet: 書き込み完了');
 			} catch (e) {
@@ -176,7 +184,7 @@ app.get('/post', async (c) => {
 
 		return c.text(results.join('\n'));
 	} catch (e) {
-		await logError(c.env.FIT2BSKY_KV, 'fitbit_get_weight', e);
+		await logError(c.env.FIT2BSKY_KV, 'health_get_weight', e);
 		return c.text('Error: ' + e, 500);
 	}
 });
@@ -187,8 +195,8 @@ app.get('/sheet', async (c) => {
 			return c.text('本日は書き込み済みです');
 		}
 
-		const data = await fitbit.GetWeight(c.env, c.req.url, new Date());
-		await sheet.Update(c.env, data.weight);
+		const { day, data } = await getTodayWeight(c.env);
+		await sheet.Update(c.env, day, data.weight);
 		await markSheetWritten(c.env.FIT2BSKY_KV);
 		return c.text('シートへの書き込みが完了しました');
 	} catch (e) {
@@ -233,7 +241,7 @@ app.get('/status', async (c) => {
 
 app.get('/weight', async (c) => {
 	try {
-		const data = await fitbit.GetWeight(c.env, c.req.url, new Date());
+		const { data } = await getTodayWeight(c.env);
 		return c.json(data);
 	} catch (e) {
 		return c.text('Error: ' + e, 500);
@@ -256,9 +264,10 @@ app.get('/', async (c) => {
 	let aiComment = null;
 	let diffFromTarget = null;
 	try {
-		weightData = await fitbit.GetWeight(c.env, c.req.url, new Date());
+		const { token, data } = await getTodayWeight(c.env);
+		weightData = data;
 		diffFromTarget = weightData.weight - targetWeight;
-		const context = await buildWeightContext(c.env, c.req.url, weightData, streakDays);
+		const context = await buildWeightContext(c.env, token, weightData, streakDays);
 		aiComment = generateComment(context);
 	} catch (e) {
 		weightError = e instanceof Error ? e.message : String(e);
@@ -328,7 +337,7 @@ app.get('/', async (c) => {
 </head>
 <body>
 	<h1>fit2bsky-cw</h1>
-	<p class="subtitle">Fitbit体重データ → Bluesky投稿 Bot</p>
+	<p class="subtitle">Google Health（Fitbit）体重データ → Bluesky投稿 Bot</p>
 
 	<div class="card">
 		<h2>本日のステータス (${day})</h2>
@@ -355,7 +364,7 @@ app.get('/', async (c) => {
 				? `<table>
 			<tr><th>体重</th><td><strong>${weightData.weight.toFixed(1)} kg</strong></td></tr>
 			<tr><th>BMI</th><td>${weightData.bmi.toFixed(2)}</td></tr>
-			<tr><th>体脂肪率</th><td>${weightData.fat.toFixed(2)} %</td></tr>
+			<tr><th>体脂肪率</th><td>${formatFat(weightData.fat)}</td></tr>
 			<tr><th>測定時刻</th><td>${weightData.time}</td></tr>
 			<tr><th>目標体重</th><td>${targetWeight.toFixed(1)} kg</td></tr>
 			<tr><th>目標との差</th><td class="${diffFromTarget !== null && diffFromTarget > 0 ? 'diff-positive' : 'diff-negative'}">${diffFromTarget !== null ? (diffFromTarget > 0 ? '+' : '') + diffFromTarget.toFixed(1) : '-'} kg</td></tr>
@@ -371,7 +380,7 @@ app.get('/', async (c) => {
 		<div class="links">
 			<a href="/post">投稿実行</a>
 			<a href="/sheet" class="secondary">シート書き込み</a>
-			<a href="/auth" class="secondary">Fitbit認証</a>
+			<a href="/auth" class="secondary">Google Health認証</a>
 		</div>
 	</div>
 
@@ -395,15 +404,14 @@ app.get('/', async (c) => {
 });
 
 const scheduled: ExportedHandlerScheduledHandler<Bindings> = async (_event, env) => {
-	const baseUrl = env.BASE_URL;
-
-	let data;
-	try {
-		data = await fitbit.GetWeight(env, baseUrl, new Date());
-	} catch (e) {
-		await logError(env.FIT2BSKY_KV, 'scheduled_fitbit_get_weight', e);
+	const today = await getTodayWeight(env).catch(async (e) => {
+		await logError(env.FIT2BSKY_KV, 'scheduled_health_get_weight', e);
+		return null;
+	});
+	if (!today) {
 		return;
 	}
+	const { token, day, data } = today;
 
 	const streakDays = await updateStreak(env.FIT2BSKY_KV);
 
@@ -411,7 +419,7 @@ const scheduled: ExportedHandlerScheduledHandler<Bindings> = async (_event, env)
 	if (!(await isBlueskyPosted(env.FIT2BSKY_KV))) {
 		try {
 			const jpy = await getJPYRate();
-			const context = await buildWeightContext(env, baseUrl, data, streakDays);
+			const context = await buildWeightContext(env, token, data, streakDays);
 			const aiComment = generateComment(context);
 			const msg = formatPostMessage(data, streakDays, jpy, aiComment);
 			await bluesky.postMessage(env, msg);
@@ -424,7 +432,7 @@ const scheduled: ExportedHandlerScheduledHandler<Bindings> = async (_event, env)
 	// シート書き込み（未書き込みの場合のみ）
 	if (!(await isSheetWritten(env.FIT2BSKY_KV))) {
 		try {
-			await sheet.Update(env, data.weight);
+			await sheet.Update(env, day, data.weight);
 			await markSheetWritten(env.FIT2BSKY_KV);
 		} catch (e) {
 			await logError(env.FIT2BSKY_KV, 'scheduled_sheet_write', e);

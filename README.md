@@ -1,6 +1,6 @@
 # fit2bsky-cw
 
-Fitbitで測定した体重（と体脂肪率）のデータをBlueskyへ投稿するbot。Cloudflare Workersで稼働させることを前提にしている。
+Fitbit で測定した体重（と体脂肪率）のデータを、Google Health API から取得して Bluesky へ投稿する bot。Cloudflare Workers で稼働させることを前提にしている。
 おまけで、GoogleSpreadsheetにも体重データを書き込む。
 
 ## 動かし方
@@ -13,15 +13,17 @@ npm run deploy
 
 Cloudflare secretで以下の変数を設定しておく必要がある。（dashboardか、wrangler secret putで設定）
 
-- CLIENT_ID
-- CLIENT_SECRET
+- GOOGLE_HEALTH_CLIENT_ID（Google Health API 用の OAuth クライアント）
+- GOOGLE_HEALTH_CLIENT_SECRET
 - BSKY_HANDLE
 - BSKY_PASSWORD
 - SHEET_ID
 - SHEET_NAME
 - GOOGLE_CREDENTIALS
 
-また、Cloudflare KVも作成してwrangler.tomlの設定を書き換える必要がある。
+また、Cloudflare KV も作成して wrangler.toml の設定を書き換える必要がある。BMI は体重と wrangler.toml の `HEIGHT_CM`（身長）から計算する。
+
+Google Health API の OAuth クライアントは、Google Cloud で Google Health API を有効にしたうえで「ウェブアプリケーション」として作り、redirect URI に `<デプロイ先>/oauth/callback` を登録する。同意画面の公開状態が「テスト」のままだと refresh token が 7 日で切れるので、「本番」にする。
 
 ## 使い方
 
@@ -33,19 +35,19 @@ Cloudflare Workersでwebアプリとして（も）動作する。
 
 ### /auth
 
-Fitbit の OAuth2 の認証を行なう。事前にこれを実行しておく。
+Google Health API の OAuth2 の認証を行なう。事前にこれを実行しておく。
 
 ### /post
 
-Fitbit APIのデータをBlueskyに投稿し、sheetに書き込む。各処理は1日1回のみ実行される。
+体重データを Bluesky に投稿し、sheet に書き込む。各処理は 1 日 1 回のみ実行される。
 
 ### /sheet
 
-Fitbit APIのデータをsheetに書き込む。1日1回のみ実行される。
+体重データを sheet に書き込む。1 日 1 回のみ実行される。
 
 ### /weight
 
-Fitbit APIを叩いて当日の体重その他の測定データをJSONで返す。
+Google Health API を叩いて当日（JST）の体重その他の測定データを JSON で返す。
 
 ### /status
 

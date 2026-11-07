@@ -1,20 +1,23 @@
 # fit2bsky-cw
 
-Fitbitで測定した体重データをBlueskyに自動投稿するボット。Cloudflare Workersで稼働。
+Fitbit で測定した体重データを Google Health API から取得し、Bluesky に自動投稿するボット。Cloudflare Workers で稼働。日付はすべて JST で扱う（`src/date.ts`）。
 
 ## 技術スタック
 
 - **ランタイム**: Cloudflare Workers
 - **フレームワーク**: Hono
 - **言語**: TypeScript
-- **主な依存**: `@atproto/api`（Bluesky）、`web-auth-library`（Google認証）
+- **主な依存**: `@atproto/api`（Bluesky）、`web-auth-library`（シート書き込み用のサービスアカウント認証。Google Health の OAuth は `src/health.ts` が自前で行う）
 
 ## ファイル構成
 
 ```
 src/
 ├── index.ts      # エントリーポイント、ルーティング、cronハンドラ、ダッシュボード
-├── fitbit.ts     # Fitbit API連携（OAuth2、体重取得）
+├── health.ts     # Google Health API連携（Google OAuth2、体重・体脂肪率の取得、BMIの計算）
+├── date.ts       # JSTの日付の計算
+├── ai.ts         # 投稿に添えるAIコメントの選択
+├── comments.ts   # AIコメントの文例
 ├── bluesky.ts    # Bluesky投稿
 ├── sheet.ts      # Google Spreadsheet書き込み
 ├── fx.ts         # ドル円レート取得（Bitfinex API）
@@ -26,7 +29,7 @@ src/
 | パス | 説明 |
 |------|------|
 | `/` | ダッシュボード（ステータス・体重データ・各機能へのリンク） |
-| `/auth` | Fitbit OAuth2認証開始 |
+| `/auth` | Google Health API の OAuth2 認証開始 |
 | `/oauth/callback` | OAuth2コールバック |
 | `/post` | Bluesky投稿 + シート書き込み（各1日1回制限） |
 | `/sheet` | シートへの書き込みのみ（1日1回制限） |
@@ -67,14 +70,15 @@ src/
 
 | 変数名 | 説明 |
 |--------|------|
-| `BASE_URL` | アプリケーションのベースURL |
+| `TARGET_WEIGHT` | 目標体重（kg） |
+| `HEIGHT_CM` | 身長（cm）。BMI の計算に使う |
 
 ### Cloudflare Secrets で設定
 
 | 変数名 | 説明 |
 |--------|------|
-| `CLIENT_ID` | Fitbit OAuth Client ID |
-| `CLIENT_SECRET` | Fitbit OAuth Client Secret |
+| `GOOGLE_HEALTH_CLIENT_ID` | Google Health API の OAuth Client ID |
+| `GOOGLE_HEALTH_CLIENT_SECRET` | Google Health API の OAuth Client Secret |
 | `BSKY_HANDLE` | Blueskyハンドル |
 | `BSKY_PASSWORD` | Blueskyパスワード |
 | `SHEET_ID` | Google SpreadsheetのID |
@@ -108,7 +112,9 @@ action の `uses:` は完全な版のタグ（`@v7.0.1`）で書き、実際に�
 
 | キー | TTL | 説明 |
 |------|-----|------|
-| `FITBIT_REFRESH_TOKEN` | なし | Fitbit OAuth refresh token |
+| `GOOGLE_HEALTH_REFRESH_TOKEN` | なし | Google Health API の OAuth refresh token |
 | `BSKY_POST_{date}` | 24h | Bluesky投稿済みフラグ |
 | `SHEET_WRITE_{date}` | 24h | シート書き込み済みフラグ |
 | `ERROR_LOG_{date}` | 7日 | エラーログ（JSON配列） |
+| `MEASUREMENT_STREAK` | なし | 連続記録の日数 |
+| `LAST_MEASUREMENT_DATE` | なし | 連続記録を最後に数えた日 |

@@ -1,10 +1,9 @@
-import { FitbitWeight } from './fitbit';
+import { WeightRecord } from './health';
 import { selectComment } from './comments';
 
 export interface WeightContext {
-	current: FitbitWeight;
-	oneYearAgo: FitbitWeight | null;
-	oneMonthAgo: FitbitWeight | null;
+	current: WeightRecord;
+	oneMonthAgo: WeightRecord | null;
 	targetWeight: number;
 	streakDays: number;
 }

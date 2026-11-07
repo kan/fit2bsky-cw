@@ -1,15 +1,15 @@
 import { getAccessToken } from 'web-auth-library/google';
 import { Bindings } from './bindings';
+import { daysBetween } from './date';
 
-async function Update(env: Bindings, value: number): Promise<void> {
+/** day（JST、YYYY-MM-DD）の行に体重を書き込む。 */
+async function Update(env: Bindings, day: string, value: number): Promise<void> {
 	const token = await getAccessToken({
 		credentials: env.GOOGLE_CREDENTIALS,
 		scope: 'https://www.googleapis.com/auth/spreadsheets',
 	});
 
-	const begin = new Date('2016-05-02').valueOf();
-	const now = new Date().valueOf();
-	const line = Math.floor((now - begin) / (1000 * 60 * 60 * 24));
+	const line = daysBetween('2016-05-02', day);
 	const range = `${env.SHEET_NAME}!D${line}`;
 	const apiUrl = `https://sheets.googleapis.com/v4/spreadsheets/${env.SHEET_ID}/values/${encodeURIComponent(range)}?valueInputOption=RAW`;
 
