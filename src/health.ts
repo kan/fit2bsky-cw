@@ -1,4 +1,5 @@
 import { addDays } from './date';
+import { fetchOk } from './http';
 
 /** 1 日分の体重の記録。date / time は記録したときの現地時刻。 */
 export interface WeightRecord {
@@ -65,8 +66,8 @@ function errorReason(body: string): string | null {
 	}
 }
 
-async function throwResponseError(label: string, res: Response): Promise<never> {
-	const body = await res.text();
+/** fetchOk の describe に渡す。エラーの理由と、直し方のヒントを返す */
+function describeError(body: string): string {
 	const reason = errorReason(body);
 	const hint =
 		reason === 'invalid_grant'
@@ -74,7 +75,12 @@ async function throwResponseError(label: string, res: Response): Promise<never> 
 			: reason === 'ACCOUNT_NOT_LINKED'
 				? '（Google アカウントが Google Health に連携されていない）'
 				: '';
-	throw Error(`${label}: ${reason ?? 'unknown'}${hint} status=${res.status} msg=${body}`);
+	return `${reason ?? 'unknown'}${hint}`;
+}
+
+/** fetchOk に、Google の応答を読み分ける describeError を付けたもの */
+function healthFetch(label: string, input: string, init?: RequestInit): Promise<Response> {
+	return fetchOk(label, input, init, describeError);
 }
 
 function getAuthURL(env: Env, url: string, state: string): string {
@@ -91,7 +97,7 @@ function getAuthURL(env: Env, url: string, state: string): string {
 }
 
 async function requestToken(env: Env, params: Record<string, string>): Promise<TokenResponse> {
-	const res = await fetch(TOKEN_URL, {
+	const res = await healthFetch("Can't get token", TOKEN_URL, {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
 		body: new URLSearchParams({
@@ -100,9 +106,6 @@ async function requestToken(env: Env, params: Record<string, string>): Promise<T
 			...params,
 		}),
 	});
-	if (!res.ok) {
-		await throwResponseError("Can't get token", res);
-	}
 	return (await res.json()) as TokenResponse;
 }
 
@@ -117,12 +120,9 @@ async function exchangeCode(env: Env, url: string, code: string): Promise<void> 
 		throw Error("Can't get refresh token: 応答に refresh_token が無い");
 	}
 
-	const res = await fetch(`${API_BASE}/identity`, {
+	await healthFetch("Can't verify Google Health account", `${API_BASE}/identity`, {
 		headers: { Authorization: `Bearer ${data.access_token}` },
 	});
-	if (!res.ok) {
-		await throwResponseError("Can't verify Google Health account", res);
-	}
 
 	await env.FIT2BSKY_KV.put(REFRESH_TOKEN_KEY, data.refresh_token);
 }
@@ -155,12 +155,9 @@ async function fetchDataPoints(token: string, dataType: string, day: string): Pr
 		if (pageToken) {
 			query.set('pageToken', pageToken);
 		}
-		const res = await fetch(`${API_BASE}/dataTypes/${dataType}/dataPoints?${query.toString()}`, {
+		const res = await healthFetch(`Can't get ${dataType}`, `${API_BASE}/dataTypes/${dataType}/dataPoints?${query.toString()}`, {
 			headers: { Authorization: `Bearer ${token}` },
 		});
-		if (!res.ok) {
-			await throwResponseError(`Can't get ${dataType}`, res);
-		}
 		const data = (await res.json()) as DataPointsResponse;
 		points.push(...(data.dataPoints ?? []));
 		pageToken = data.nextPageToken ?? '';

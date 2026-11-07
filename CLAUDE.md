@@ -7,7 +7,7 @@ Fitbit で測定した体重データを Google Health API から取得し、Blu
 - **ランタイム**: Cloudflare Workers
 - **フレームワーク**: Hono
 - **言語**: TypeScript
-- **主な依存**: `@atproto/api`（Bluesky）、`web-auth-library`（シート書き込み用のサービスアカウント認証。Google Health の OAuth は `src/health.ts` が自前で行う）
+- **主な依存**: `@atproto/api`（Bluesky）、`jose`（シート書き込み用のサービスアカウントの JWT の署名。token との交換は `src/sheet.ts` が行う。Google Health の OAuth は `src/health.ts` が自前で行う）
 
 ## ファイル構成
 
@@ -22,8 +22,13 @@ src/
 ├── comments.ts   # AIコメントの文例
 ├── bluesky.ts    # Bluesky投稿
 ├── sheet.ts      # Google Spreadsheet書き込み
-└── fx.ts         # ドル円レート取得（Bitfinex API）
+├── fx.ts         # ドル円レート取得（Bitfinex API）
+└── http.ts       # 外部 API の fetch に共通のタイムアウトとエラー（fetchOk / fetchWithTimeout）
 ```
+
+外部 API は `src/http.ts` の `fetchOk`（2xx 以外やタイムアウトを、label 付きの例外にする）か `fetchWithTimeout` を
+通して呼ぶ。素の `fetch` はタイムアウトが付かないので、src では ESLint が止める。fetch を差し替えられるライブラリ
+（`@atproto/api` の `CredentialSession` など）にも `fetchWithTimeout` を渡す。
 
 環境変数の型は、`wrangler.jsonc` から `npm run cf-typegen`（`wrangler types --strict-vars=false`）で生成した
 `worker-configuration.d.ts` のグローバルな `Env` を使う。`Env` を手で書かない。生成したファイルは commit し、

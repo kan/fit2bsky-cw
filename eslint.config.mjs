@@ -31,4 +31,20 @@ export default [
 			'no-console': ['warn', { allow: ['error'] }],
 		},
 	},
+	{
+		files: ['src/**/*.ts'],
+		ignores: ['src/http.ts'],
+		rules: {
+			// fetch を差し替えられるライブラリにも fetchWithTimeout を渡す（lint では見つけられない）
+			'no-restricted-globals': [
+				'error',
+				{ name: 'fetch', message: 'タイムアウトを付けるため、src/http.ts の fetchOk か fetchWithTimeout を使う' },
+			],
+			'no-restricted-properties': [
+				'error',
+				{ object: 'globalThis', property: 'fetch', message: 'src/http.ts の fetchOk か fetchWithTimeout を使う' },
+				{ object: 'self', property: 'fetch', message: 'src/http.ts の fetchOk か fetchWithTimeout を使う' },
+			],
+		},
+	},
 ];

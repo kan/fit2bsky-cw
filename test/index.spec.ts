@@ -72,7 +72,7 @@ describe('GET /weight', () => {
 
 describe('POST /post', () => {
 	it('Bluesky に投稿し、シートのその日の行に書き込む', async () => {
-		const { requests, posts, writes } = mockDaily({
+		const { requests, posts, records, writes } = mockDaily({
 			[TODAY]: { weight: [{ at: `${TODAY}T07:48:44`, value: 134 }], fat: [{ at: `${TODAY}T07:48:44`, value: 33.028 }] },
 			...oneWeight('2026-10-08', 136),
 		});
@@ -81,6 +81,7 @@ describe('POST /post', () => {
 		const res = await call(env, '/post', FORM_POST);
 
 		expect(res.status).toBe(200);
+		expect(records[0]).toMatchObject({ $type: 'app.bsky.feed.post', langs: ['ja'] });
 		// AI コメントのために 30 日前の体重も取る
 		expect(requests.map(filterDay).sort()).toEqual(['2026-10-08', '2026-10-08', TODAY, TODAY]);
 		expect(posts).toHaveLength(1);
@@ -131,6 +132,18 @@ describe('POST /sheet', () => {
 		// 投稿しないので 1 か月前の体重は取らない
 		expect(requests.map(filterDay)).toEqual([TODAY, TODAY]);
 	});
+
+	it('GOOGLE_CREDENTIALS が壊れていても、中身をエラーログに残さない', async () => {
+		const { writes } = mockDaily();
+		const env = { ...(await testEnv()), GOOGLE_CREDENTIALS: '{"private_key": "SECRET-KEY-MATERIAL", ' };
+		const res = await call(env, '/sheet', FORM_POST);
+
+		expect(res.status).toBe(500);
+		expect(writes).toHaveLength(0);
+		const logs = JSON.stringify(await (await call(env, '/errors')).json());
+		expect(logs).toContain('GOOGLE_CREDENTIALS が JSON として読めない');
+		expect(logs).not.toContain('SECRET-KEY-MATERIAL');
+	});
 });
 
 describe('GET /fx', () => {
@@ -150,6 +163,23 @@ describe('GET /fx', () => {
 		network.use(http.post(FX_URL, () => HttpResponse.text('down', { status: 503 })));
 		const res = await call(await testEnv(), '/fx');
 		expect(res.status).toBe(500);
+		expect(await res.text()).toContain('status=503 msg=down');
+	});
+
+	it('応答が数値の配列でなければ 500 を返す', async () => {
+		network.use(http.post(FX_URL, () => HttpResponse.json({ error: 'ratelimit' })));
+		const res = await call(await testEnv(), '/fx');
+		expect(res.status).toBe(500);
+		expect(await res.text()).toContain('応答が数値の配列ではない');
+	});
+
+	it('応答が返らなければ打ち切って 500 を返す', async () => {
+		vi.useRealTimers();
+		vi.spyOn(AbortSignal, 'timeout').mockReturnValue(AbortSignal.abort(new DOMException('timed out', 'TimeoutError')));
+		mockFx();
+		const res = await call(await testEnv(), '/fx');
+		expect(res.status).toBe(500);
+		expect(await res.text()).toContain('TimeoutError');
 	});
 });
 
