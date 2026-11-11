@@ -5,15 +5,18 @@ import { addDays } from '../src/date';
 import { network } from './network';
 import {
 	CLAUDE_COMMENT,
+	DEEPSEEK_COMMENT,
 	FORM_POST,
 	TODAY,
 	call,
 	claudeText,
+	deepSeekText,
 	errorLogs,
 	filterDay,
 	mockBluesky,
 	mockClaude,
 	mockDaily,
+	mockDeepSeek,
 	oneWeight,
 	testEnv,
 } from './helpers';
@@ -167,22 +170,24 @@ describe('AI コメント', () => {
 	});
 
 	it.each([
-		[
-			'API のエラー',
-			() => HttpResponse.json({ type: 'error', error: { type: 'overloaded_error', message: 'busy' } }, { status: 529 }),
-			'529',
-		],
 		['拒否', () => claudeText('', 'refusal'), 'stop_reason=refusal'],
 		['長すぎる', () => claudeText(JSON.stringify({ comment: 'あ'.repeat(61) })), '61 字'],
 		['JSON でない', () => claudeText('ただの文'), 'JSON'],
-	])('%s なら文例に戻して投稿し、エラーログに残す', async (_name, reply, logged) => {
+		[
+			'400 のエラー',
+			() => HttpResponse.json({ type: 'error', error: { type: 'invalid_request_error', message: 'bad' } }, { status: 400 }),
+			'400',
+		],
+	])('%s なら DeepSeek を使わずに文例に戻して投稿し、エラーログに残す', async (_name, reply, logged) => {
 		const { posts } = mockDaily(FOUR_DAYS);
 		mockClaude(reply);
 		const env = await testEnv();
+		const { calls } = mockDeepSeek(env);
 
 		const res = await call(env, '/post', FORM_POST);
 
 		expect(res.status).toBe(200);
+		expect(calls).toHaveLength(0);
 		expect(posts).toHaveLength(1);
 		expect(postedComment(posts[0])).toMatch(/^定型文「.+」$/);
 		expect(posts[0]).not.toContain(CLAUDE_COMMENT);
@@ -192,6 +197,80 @@ describe('AI コメント', () => {
 		expect(errors[0]).toContain(logged);
 		// 投稿した文例は、ダッシュボードに出すために保存する
 		expect(await (await call(env, '/')).text()).toContain(postedComment(posts[0]));
+	});
+
+	it.each([
+		['529', () => HttpResponse.json({ type: 'error', error: { type: 'overloaded_error', message: 'busy' } }, { status: 529 }), '529'],
+		['500', () => HttpResponse.json({ type: 'error', error: { type: 'api_error', message: 'boom' } }, { status: 500 }), '500'],
+		['429', () => HttpResponse.json({ type: 'error', error: { type: 'rate_limit_error', message: 'slow down' } }, { status: 429 }), '429'],
+		['接続の失敗', () => HttpResponse.error(), 'Connection error'],
+	])('Claude が %s なら DeepSeek で作り、切り替えたことをエラーログに残す', async (_name, reply, logged) => {
+		const { posts } = mockDaily(FOUR_DAYS);
+		mockClaude(reply);
+		const env = await testEnv();
+		const { calls } = mockDeepSeek(env);
+
+		const res = await call(env, '/post', FORM_POST);
+
+		expect(res.status).toBe(200);
+		expect(calls).toHaveLength(1);
+		expect(calls[0].model).toBe('@cf/deepseek-ai/deepseek-v4.1-flash-1017');
+		const sent = calls[0].inputs.messages as { role: string; content: string }[];
+		expect(sent.map((m) => m.role)).toEqual(['system', 'user']);
+		expect(sent[0].content).toContain('60 文字以内');
+		expect(sent[1].content).toContain('前日との差: -0.5kg');
+		expect(calls[0].inputs.response_format).toMatchObject({ type: 'json_schema' });
+		// env.AI.run() は fetchWithTimeout を通らないので、別にタイムアウトを付ける
+		expect(calls[0].options?.signal).toBeInstanceOf(AbortSignal);
+		expect(postedComment(posts[0])).toBe(`DeepSeek「${DEEPSEEK_COMMENT}」`);
+		const errors = await errorContexts(env);
+		expect(errors).toHaveLength(1);
+		expect(errors[0]).toMatch(/^ai_comment: DeepSeek に切り替え（Claude: /);
+		expect(errors[0]).toContain(logged);
+		expect(await (await call(env, '/')).text()).toContain(`DeepSeek「${DEEPSEEK_COMMENT}」`);
+		expect(await env.FIT2BSKY_KV.get('RECENT_AI_COMMENTS', 'json')).toEqual([{ day: TODAY, text: DEEPSEEK_COMMENT }]);
+	});
+
+	it.each([
+		[
+			'失敗する',
+			() => {
+				throw Error('InferenceUpstreamError');
+			},
+			'InferenceUpstreamError',
+		],
+		['長すぎる', () => deepSeekText(JSON.stringify({ comment: 'あ'.repeat(61) })), '61 字'],
+		['途中で切れる', () => deepSeekText('{"comment": "途中', 'length'), 'finish_reason=length'],
+	])('DeepSeek も %s なら文例に戻し、両方の失敗をエラーログに残す', async (_name, reply, logged) => {
+		const { posts } = mockDaily(FOUR_DAYS);
+		mockClaude(() => HttpResponse.json({ type: 'error', error: { type: 'overloaded_error', message: 'busy' } }, { status: 529 }));
+		const env = await testEnv();
+		mockDeepSeek(env, reply);
+
+		await call(env, '/post', FORM_POST);
+
+		expect(postedComment(posts[0])).toMatch(/^定型文「.+」$/);
+		const errors = await errorContexts(env);
+		expect(errors).toHaveLength(2);
+		expect(errors[0]).toMatch(/^ai_comment: DeepSeek に切り替え（Claude: .*529/);
+		expect(errors[1]).toMatch(/^ai_comment: DeepSeek: /);
+		expect(errors[1]).toContain(logged);
+	});
+
+	it('DeepSeek で作ったあと投稿に失敗したら、次の実行では保存したコメントと見出しを使う', async () => {
+		mockDaily(FOUR_DAYS, { bskyFail: true });
+		mockClaude(() => HttpResponse.json({ type: 'error', error: { type: 'overloaded_error', message: 'busy' } }, { status: 529 }));
+		const env = await testEnv();
+		const first = mockDeepSeek(env);
+		await call(env, '/post', FORM_POST);
+
+		const retry = mockClaude();
+		const { posts } = mockBluesky();
+		await call(env, '/post', FORM_POST);
+
+		expect(first.calls).toHaveLength(1);
+		expect(retry.messages).toHaveLength(0);
+		expect(postedComment(posts[0])).toBe(`DeepSeek「${DEEPSEEK_COMMENT}」`);
 	});
 
 	it('生成も投稿も失敗したら文例は保存せず、次の実行で Claude に作り直させる', async () => {
@@ -293,6 +372,34 @@ describe('コメントのテスト生成', () => {
 		expect(await res.text()).toContain('書いたモデル: claude-opus-4-8');
 	});
 
+	it('DeepSeek を選ぶと、Claude を呼ばずに DeepSeek で作る', async () => {
+		const { messages } = mockDaily(FOUR_DAYS);
+		const env = await testEnv();
+		const { calls } = mockDeepSeek(env);
+
+		const res = await call(env, '/comment/test', testForm('@cf/deepseek-ai/deepseek-v4.1-flash-1017'));
+
+		expect(res.status).toBe(200);
+		const text = await res.text();
+		expect(text.split('\n')[0]).toBe(`DeepSeek「${DEEPSEEK_COMMENT}」`);
+		expect(text).toContain('書いたモデル: @cf/deepseek-ai/deepseek-v4.1-flash-1017');
+		expect(text).toContain('前日との差: -0.5kg');
+		expect(calls).toHaveLength(1);
+		expect(messages).toHaveLength(0);
+		expect(await savedState(env)).toEqual([null, null, null, null, null]);
+	});
+
+	it('DeepSeek の生成に失敗したら 500 を返し、エラーログには残さない', async () => {
+		mockDaily(FOUR_DAYS);
+		const env = await testEnv();
+		mockDeepSeek(env, () => deepSeekText('ただの文'));
+
+		const res = await call(env, '/comment/test', testForm('@cf/deepseek-ai/deepseek-v4.1-flash-1017'));
+
+		expect(res.status).toBe(500);
+		expect(await errorLogs(env)).toEqual([]);
+	});
+
 	it('定型文を選ぶと、Claude を呼ばずに文例から選び、材料は出さない', async () => {
 		const { messages } = mockDaily(FOUR_DAYS);
 		const res = await call(await testEnv(), '/comment/test', testForm('template'));
@@ -355,7 +462,7 @@ describe('コメントのテスト生成', () => {
 		const dashboard = await (await call(await testEnv(), '/')).text();
 
 		expect(dashboard).toContain('action="/comment/test"');
-		for (const value of ['claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-8', 'template']) {
+		for (const value of ['claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-8', '@cf/deepseek-ai/deepseek-v4.1-flash-1017', 'template']) {
 			expect(dashboard).toContain(`<option value="${value}">`);
 		}
 	});

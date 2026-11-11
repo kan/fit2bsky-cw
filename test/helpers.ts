@@ -81,7 +81,54 @@ export async function testEnv(): Promise<Env> {
 		SHEET_NAME: 'weight',
 		GOOGLE_CREDENTIALS: serviceAccount.json,
 		ANTHROPIC_API_KEY: 'anthropic-key',
+		// 本物の Workers AI へ出ないよう、mockDeepSeek を呼ぶまでは失敗させる（MSW の受け皿の 599 と同じ役目）
+		AI: fakeAi(() => {
+			throw Error('unmocked AI.run');
+		}),
 	};
+}
+
+export interface AiCall {
+	model: string;
+	inputs: Record<string, unknown>;
+	options?: { signal?: AbortSignal };
+}
+
+function fakeAi(reply: (call: AiCall) => unknown, calls: AiCall[] = []): Ai {
+	return {
+		run: async (model: string, inputs: Record<string, unknown>, options?: AiCall['options']) => {
+			const call = { model, inputs, options };
+			calls.push(call);
+			return reply(call);
+		},
+	} as unknown as Ai;
+}
+
+export const DEEPSEEK_COMMENT = '秋の夜長を体重計の上で過ごすおつもりですか';
+
+/** Workers AI の chat completions の応答。content を 1 つの choice で返す */
+export function deepSeekText(content: string, finishReason = 'stop') {
+	return {
+		id: 'chatcmpl-test',
+		object: 'chat.completion',
+		created: 0,
+		model: '@cf/deepseek-ai/deepseek-v4.1-flash-1017',
+		choices: [{ index: 0, message: { role: 'assistant', content }, finish_reason: finishReason, logprobs: null }],
+		usage: { prompt_tokens: 800, completion_tokens: 500, total_tokens: 1300 },
+	};
+}
+
+/**
+ * env.AI を差し替える（env.AI.run() は fetch を通らず、MSW では差し替えられないため）。calls に呼び出しがたまる。
+ * reply で応答を差し替える（既定は DEEPSEEK_COMMENT を JSON で返す）。例外を投げれば、run() の失敗になる
+ */
+export function mockDeepSeek(
+	env: Env,
+	reply: (call: AiCall) => unknown = () => deepSeekText(JSON.stringify({ comment: DEEPSEEK_COMMENT })),
+) {
+	const calls: AiCall[] = [];
+	env.AI = fakeAi(reply, calls);
+	return { calls };
 }
 
 interface Sample {

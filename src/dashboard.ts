@@ -1,7 +1,7 @@
 import { html, raw } from 'hono/html';
 import { WeightRecord } from './health';
 import { DailyStatus, formatFat } from './daily';
-import { AiComment, TEST_MODELS, formatComment } from './ai';
+import { AiComment, DEEPSEEK_MODEL, TEST_MODELS, formatComment } from './ai';
 
 export interface DashboardProps {
 	day: string;
@@ -168,10 +168,11 @@ export function renderDashboard(props: DashboardProps) {
 
 				<div class="card">
 					<h2>コメントのテスト生成</h2>
-					<p class="note">今日の材料で作ります。保存も投稿もしません（Claude を選ぶと API の料金がかかります）</p>
+					<p class="note">今日の材料で作ります。保存も投稿もしません（Claude か DeepSeek を選ぶと API の料金がかかります）</p>
 					<form method="post" action="/comment/test" class="links">
 						<select name="source">
 							${TEST_MODELS.map((m) => html`<option value="${m}">${m}</option>`)}
+							<option value="${DEEPSEEK_MODEL}">${DEEPSEEK_MODEL}（Workers AI）</option>
 							<option value="template">定型文（src/comments.ts）</option>
 						</select>
 						<button type="submit" class="secondary">試しに作る</button>

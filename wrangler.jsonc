@@ -17,6 +17,9 @@
 	"observability": {
 		"enabled": true,
 	},
+	// Anthropic の API が使えないときに、コメントを DeepSeek で作る（src/ai.ts）。
+	// AI は wrangler dev でも本物を呼ぶ（料金がかかる）。テストは vitest.config.mts で remote を切っている
+	"ai": { "binding": "AI", "remote": true },
 	"kv_namespaces": [
 		{
 			"binding": "FIT2BSKY_KV",

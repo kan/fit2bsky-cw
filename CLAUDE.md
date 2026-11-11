@@ -10,6 +10,7 @@ Fitbit で測定した体重データを Google Health API から取得し、Blu
 - **主な依存**:
   - `@atproto/api`（Bluesky）
   - `@anthropic-ai/sdk`（AI コメントの生成）
+  - Workers AI（`env.AI`。Anthropic の API が使えないときの AI コメントの生成）
   - `jose`（シート書き込み用のサービスアカウントの JWT の署名。token との交換は `src/sheet.ts` が行う。Google Health の OAuth は `src/health.ts` が自前で行う）
 
 ## ファイル構成
@@ -22,7 +23,7 @@ src/
 ├── favicon.ts    # favicon の SVG（wrangler は既定では .svg をモジュールとして読めないので文字列で持つ）
 ├── health.ts     # Google Health API連携（Google OAuth2、体重・体脂肪率の取得、BMIの計算）
 ├── date.ts       # JSTの日付の計算
-├── ai.ts         # 投稿に添えるAIコメントの生成（Claude のプロンプトと応答の検査）
+├── ai.ts         # 投稿に添えるAIコメントの生成（Claude と DeepSeek のプロンプトと応答の検査）
 ├── comments.ts   # AIコメントの文例（生成に失敗したときに使う）
 ├── bluesky.ts    # Bluesky投稿
 ├── sheet.ts      # Google Spreadsheet書き込み
@@ -83,17 +84,24 @@ workers.dev とプレビュー URL は `wrangler.jsonc` で閉じている。
 ### AI コメント
 - 投稿の末尾の `見出し「…」` は、Claude（モデルは `src/ai.ts` の `MODEL`）がその日の体重と、前日、1 か月前、
   1 年前との差、目標までの残り、連続記録の日数、最近のコメントから作る。モデルを選んだときの比較（Workers AI、OpenAI など）は #8 にある
-- 見出しはコメントを書いたものにする。Claude が書いたら応答の `model` から作り（`Claude Opus` など）、文例なら `定型文`
+- 見出しはコメントを書いたものにする。Claude が書いたら応答の `model` から作り（`Claude Opus` など）、DeepSeek なら `DeepSeek`、文例なら `定型文`
 - 前日比と前年比は本文に出るので、プロンプトはその数字をなぞらず、意味づけや本文に出ない材料で皮肉るよう頼んでいる
 - 同じ型の言い回しが続かないように、投稿したコメントを KV の `RECENT_AI_COMMENTS` に直近 7 日分残し、次の生成で渡す
 - 作るのは投稿するときだけで、1 日 1 回。作ったコメントは KV の `AI_COMMENT_{date}` に保存し（見出しは metadata）、
   投稿の再試行とダッシュボードで使い回す。ダッシュボードは保存済みのものを表示するだけで、生成しない
 - ダッシュボードのテスト生成（`POST /comment/test`）は、`src/ai.ts` の `TEST_MODELS`（`MODEL` と、その fallback 先の
-  モデル）か文例で、今日の材料からコメントを作って返す。fallback 先のモデルは server-side fallback を付けずに直接呼ぶ。
-  KV（コメント、最近のコメント、連続記録）は書き換えず、失敗もエラーログに残さない
+  モデル）、`DEEPSEEK_MODEL`、文例のどれかで、今日の材料からコメントを作って返す。fallback 先のモデルは server-side fallback を
+  付けずに直接呼ぶ。DeepSeek も Claude を経ずに直接呼ぶ。KV（コメント、最近のコメント、連続記録）は書き換えず、失敗も
+  エラーログに残さない
 - 安全の判定で拒否されたときは、API が別のモデルで作り直す（server-side fallback、`fallbacks: 'default'`）
-- API のエラー、作り直しも含めた拒否、60 字超え、JSON でない応答のときは `src/comments.ts` の文例から選んで投稿し、
-  エラーログ（context は `ai_comment`）に残す。文例は投稿に成功したときだけ KV に保存する（投稿が失敗したら、
+- Anthropic の API そのものが使えないとき（5xx、529、429、接続の失敗、タイムアウト。`isAnthropicUnavailable`）は、Workers AI の
+  DeepSeek（`DEEPSEEK_MODEL`）で作る。プロンプトと応答の検査（JSON、60 字、外側の「」）は Claude と同じ。切り替えたことと
+  原因の Claude のエラーを、エラーログ（context は `ai_comment`）に残す
+  - **拒否と応答の形の不正（60 字超え、JSON でない）では DeepSeek へ回さない。** 拒否を回すと、Claude が断った内容を
+    別のモデルで通すことになる。形の不正はモデルを替えても直らない。429 以外の 4xx も回さない（キーや要求の誤りなので）
+  - DeepSeek のモデルは Workers Paid が要る。`env.AI.run()` は fetch を通らないので、タイムアウトは `signal` で付ける
+- 上の 2 つで作れなかったとき（Claude の拒否や形の不正、4xx、DeepSeek の失敗）は `src/comments.ts` の文例から選んで
+  投稿し、エラーログ（context は `ai_comment`）に残す。文例は投稿に成功したときだけ KV に保存する（投稿が失敗したら、
   再試行のときに Claude で作り直す）
 
 ### シート書き込み
@@ -151,6 +159,9 @@ npm run typecheck     # 生成した型の鮮度、src と test の型を検査
 
 `test/` は `@cloudflare/vitest-plugin` の上で動き、外部 API（Google Health、Bluesky、Sheets、Bitfinex、Claude）は
 `@msw/cloudflare` でモックする。ハンドラは `test/helpers.ts` の `mockHealth`、`mockDaily` などにまとめてある。
+`env.AI`（Workers AI）は fetch を通らず MSW で差し替えられないので、`testEnv()` が偽の binding を入れ、`mockDeepSeek()` で
+応答を差し替える。AI の binding は remote なので、`vitest.config.mts` の `remoteBindings: false` で切っている（外すと、
+Cloudflare の認証の無い CI でテストが起動しない）。
 `test/setup.ts` は受け皿のハンドラを初期のハンドラとして置く。モックの無いリクエストは本物へ出ず、
 599 が返る。`setupNetwork()` はハンドラの無いリクエストをそのまま本物へ通すので、この受け皿は外さない。
 KV は各テストの後で `reset()` して空にする。`setup.ts` は時刻も JST 2026-11-07 9:00 で固定する

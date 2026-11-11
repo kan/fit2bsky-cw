@@ -28,6 +28,8 @@ Cloudflare secretで以下の変数を設定しておく必要がある。（das
 
 `ANTHROPIC_API_KEY` は、Claude Console で bot 専用のワークスペースを作り、月の利用額の上限を付けてから、そのワークスペースで発行する（Default ワークスペースには上限を付けられない）。キーが使えなくなっても投稿は止まらず、文例のコメントで投稿してエラーログに残る。期限付きのキーにしたときは、切れる前に `wrangler secret put ANTHROPIC_API_KEY` で入れ替える。
 
+Anthropic の API が使えないとき（5xx、529、429、接続の失敗、タイムアウト）は、Workers AI の DeepSeek（`wrangler.jsonc` の `ai` binding）でコメントを作る。使っている DeepSeek のモデルは Workers の有料プラン（Workers Paid）でしか呼べない。`wrangler dev` でも AI の binding は本物を呼ぶので、料金がかかる。
+
 Google Health API の OAuth クライアントは、Google Cloud で Google Health API を有効にしたうえで「ウェブアプリケーション」として作り、redirect URI に `<デプロイ先>/oauth/callback` を登録する。同意画面の公開状態が「テスト」のままだと refresh token が 7 日で切れるので、「本番」にする。
 
 ## 使い方
@@ -52,7 +54,7 @@ Google Health API の OAuth2 の認証を行なう。事前にこれを実行し
 
 ### POST /comment/test
 
-今日の材料で、投稿に添えるコメントを試しに作って表示する。ダッシュボードから、Claude のモデル（本番のモデルと、その fallback 先）か文例を選んで実行する。作ったコメントは保存せず、投稿にも使わない。Claude を選ぶと API の料金がかかる。
+今日の材料で、投稿に添えるコメントを試しに作って表示する。ダッシュボードで、Claude のモデル（本番のモデルと、その fallback 先）、DeepSeek、文例のどれかを選んで実行する。作ったコメントは保存せず、投稿にも使わない。文例以外は API の料金がかかる。
 
 ### /weight
 

@@ -3,6 +3,14 @@ import { WeightRecord } from './health';
 import { selectComment } from './comments';
 import { fetchWithTimeout } from './http';
 
+declare global {
+	interface AiModels {
+		// wrangler 4.160 が生成する型にはまだ無いので足す。V4 の型は廃止で消えるので、汎用の chat completions の型を使う。
+		// cf-typegen が生成するようになって型が食い違ったら（TS2717）、ここを消す
+		'@cf/deepseek-ai/deepseek-v4.1-flash-1017': { inputs: ChatCompletionsInput; postProcessedOutputs: ChatCompletionsOutput };
+	}
+}
+
 /** コメントの生成に使うモデル。#8 で Workers AI、OpenAI、Claude Haiku と出力を比べて決めた */
 const MODEL = 'claude-opus-5-5';
 
@@ -12,11 +20,23 @@ const MODEL = 'claude-opus-5-5';
  */
 export const TEST_MODELS = [MODEL, 'claude-opus-5', 'claude-opus-4-8'] as const;
 
+/**
+ * Anthropic の API が使えないときに使う、Workers AI のモデル。#8 の比較では DeepSeek の出力が良かった。
+ * V4（0731 / 0813）は 2026-11-20 に廃止予定なので、後の V4.1 flash を使う
+ */
+export const DEEPSEEK_MODEL = '@cf/deepseek-ai/deepseek-v4.1-flash-1017';
+
+/** DeepSeek が書いたときの見出し */
+const DEEPSEEK_LABEL = 'DeepSeek';
+
 /** コメントの上限の文字数（書記素で数える）。投稿全体を Bluesky の 300 字に収めるため */
 const MAX_COMMENT_LENGTH = 60;
 
 /** 1 回の生成を待つ時間。比較のときの実測は平均 1.8 秒 */
 const CLAUDE_TIMEOUT_MS = 30_000;
+
+/** DeepSeek の生成を待つ時間。env.AI.run() は fetch を通らないので、fetchWithTimeout とは別に付ける */
+const DEEPSEEK_TIMEOUT_MS = 30_000;
 
 /** 文例から選んだときの見出し */
 const FALLBACK_LABEL = '定型文';
@@ -157,6 +177,11 @@ export async function generateWithClaude(env: Env, ctx: WeightContext, model: st
 		throw Error(`AI comment: stop_reason=${res.stop_reason}`);
 	}
 	const text = res.content.find((b) => b.type === 'text')?.text ?? '';
+	return { label: modelLabel(res.model), text: parseComment(text), model: res.model };
+}
+
+/** モデルが返した JSON からコメントの本文を取り出す。Claude と DeepSeek で同じ検査をする */
+function parseComment(text: string): string {
 	const { comment } = JSON.parse(text) as { comment?: unknown };
 	if (typeof comment !== 'string') {
 		throw Error('AI comment: 応答に comment が無い');
@@ -167,7 +192,44 @@ export async function generateWithClaude(env: Env, ctx: WeightContext, model: st
 	if (length === 0 || length > MAX_COMMENT_LENGTH) {
 		throw Error(`AI comment: 長さが範囲外 (${length} 字): ${trimmed}`);
 	}
-	return { label: modelLabel(res.model), text: trimmed, model: res.model };
+	return trimmed;
+}
+
+/**
+ * Anthropic の API そのものが使えない失敗か（5xx、529、429、接続の失敗、タイムアウト）。DeepSeek で作り直すのはこのときだけ。
+ * 拒否は Claude が断った内容を別のモデルで通すことになり、長さや JSON の不正はモデルを替えても直らないので、文例にする。
+ * 429 以外の 4xx（キーや要求の誤り）も文例にする
+ */
+export function isAnthropicUnavailable(e: unknown): boolean {
+	// タイムアウト（APIConnectionTimeoutError）も APIConnectionError に入る
+	return (
+		e instanceof Anthropic.APIConnectionError ||
+		e instanceof Anthropic.RateLimitError ||
+		(e instanceof Anthropic.APIError && (e.status ?? 0) >= 500)
+	);
+}
+
+/** Workers AI の DeepSeek にその日のコメントを作らせる。プロンプトと応答の検査は Claude と同じ */
+export async function generateWithDeepSeek(env: Env, ctx: WeightContext): Promise<GeneratedComment> {
+	const res = await env.AI.run(
+		DEEPSEEK_MODEL,
+		{
+			messages: [
+				{ role: 'system', content: SYSTEM_PROMPT },
+				{ role: 'user', content: buildUserMessage(ctx) },
+			],
+			response_format: { type: 'json_schema', json_schema: { name: 'comment', schema: COMMENT_SCHEMA, strict: true } },
+			// 推論の分も含む。Claude の effort: 'low' に合わせる
+			reasoning_effort: 'low',
+			max_tokens: 4000,
+		},
+		{ signal: AbortSignal.timeout(DEEPSEEK_TIMEOUT_MS) },
+	);
+	const choice = res.choices[0];
+	if (choice?.finish_reason !== 'stop') {
+		throw Error(`AI comment: DeepSeek finish_reason=${choice?.finish_reason}`);
+	}
+	return { label: DEEPSEEK_LABEL, text: parseComment(choice.message.content ?? ''), model: res.model || DEEPSEEK_MODEL };
 }
 
 /** 生成に失敗したときの、文例からの選択 */

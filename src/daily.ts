@@ -4,6 +4,7 @@ import sheet from './sheet';
 import { getJPYRate } from './fx';
 import {
 	AiComment,
+	DEEPSEEK_MODEL,
 	TEST_MODELS,
 	WeightContext,
 	buildUserMessage,
@@ -11,6 +12,8 @@ import {
 	formatComment,
 	formatDiff,
 	generateWithClaude,
+	generateWithDeepSeek,
+	isAnthropicUnavailable,
 } from './ai';
 import { addDays, jstDate, sameDayLastYear } from './date';
 
@@ -185,16 +188,39 @@ async function addRecentComment(kv: KVNamespace, day: string, text: string, logP
 	}
 }
 
+/** Claude か DeepSeek のどちらかで作ったコメント */
+async function generateComment(env: Env, ctx: WeightContext, logPrefix: string): Promise<AiComment> {
+	try {
+		return await generateWithClaude(env, ctx);
+	} catch (e) {
+		if (!isAnthropicUnavailable(e)) {
+			throw e;
+		}
+		// 切り替えたことと、その原因の Claude のエラーを残す
+		const message = e instanceof Error ? e.message : String(e);
+		// 記録に失敗しても DeepSeek には進む
+		await logError(env.FIT2BSKY_KV, `${logPrefix}ai_comment`, Error(`DeepSeek に切り替え（Claude: ${message}）`, { cause: e })).catch(
+			() => {},
+		);
+	}
+	try {
+		return await generateWithDeepSeek(env, ctx);
+	} catch (e) {
+		throw Error(`DeepSeek: ${e instanceof Error ? e.message : String(e)}`, { cause: e });
+	}
+}
+
 /**
- * その日のコメントを Claude に作らせる。最近のコメントも渡す。作れたら保存し、投稿の再試行で使い回す。
- * 生成に失敗したら文例から選び、その失敗をエラーログに残す（投稿は止めない）。文例はここでは保存しない。
+ * その日のコメントを作る。最近のコメントも渡す。作れたら保存し、投稿の再試行で使い回す。
+ * Claude で作り、Anthropic の API が使えないときは DeepSeek で作る。
+ * どちらも失敗したら文例から選び、その失敗をエラーログに残す（投稿は止めない）。文例はここでは保存しない。
  * 再試行のときに、Claude で作り直せるようにするため。
  */
 async function createComment(env: Env, ctx: Omit<WeightContext, 'recentComments'>, logPrefix: string): Promise<AiComment> {
 	const kv = env.FIT2BSKY_KV;
 	const recentComments = await recentCommentTexts(kv, ctx.day);
 	try {
-		const comment = await generateWithClaude(env, { ...ctx, recentComments });
+		const comment = await generateComment(env, { ...ctx, recentComments }, logPrefix);
 		await saveComment(kv, ctx.day, comment, logPrefix);
 		return comment;
 	} catch (e) {
@@ -203,11 +229,11 @@ async function createComment(env: Env, ctx: Omit<WeightContext, 'recentComments'
 	}
 }
 
-/** テスト生成で選べるもの。TEST_MODELS のどれかか、文例（template） */
-export type TestCommentSource = (typeof TEST_MODELS)[number] | 'template';
+/** テスト生成で選べるもの。TEST_MODELS のどれかか、DeepSeek か、文例（template） */
+export type TestCommentSource = (typeof TEST_MODELS)[number] | typeof DEEPSEEK_MODEL | 'template';
 
 export function isTestCommentSource(value: unknown): value is TestCommentSource {
-	return value === 'template' || TEST_MODELS.some((m) => m === value);
+	return value === 'template' || value === DEEPSEEK_MODEL || TEST_MODELS.some((m) => m === value);
 }
 
 /**
@@ -227,9 +253,10 @@ export async function generateTestComment(env: Env, source: TestCommentSource): 
 	if (source === 'template') {
 		return formatComment(fallbackComment(ctx));
 	}
-	const comment = await generateWithClaude(env, ctx, source);
+	// DeepSeek は本番では Claude が使えないときだけ使うが、ここでは直接呼ぶ
+	const comment = source === DEEPSEEK_MODEL ? await generateWithDeepSeek(env, ctx) : await generateWithClaude(env, ctx, source);
 	// 見出しは系統の名前だけなので、server-side fallback で作り直したかは model で見分ける
-	return `${formatComment(comment)}\n\n書いたモデル: ${comment.model}\n\n--- Claude に渡した材料 ---\n${buildUserMessage(ctx)}`;
+	return `${formatComment(comment)}\n\n書いたモデル: ${comment.model}\n\n--- モデルに渡した材料 ---\n${buildUserMessage(ctx)}`;
 }
 
 export interface DailyResult {
