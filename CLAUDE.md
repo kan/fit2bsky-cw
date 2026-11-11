@@ -42,6 +42,9 @@ src/
 
 ## エンドポイント
 
+公開先は `https://weight.fushihara.net`（Custom Domain）だけで、Cloudflare Access で守る。アプリ側には認証が無いので、
+workers.dev とプレビュー URL は `wrangler.jsonc` で閉じている。
+
 | パス | 説明 |
 |------|------|
 | `/` | ダッシュボード（ステータス・体重データ・各機能へのリンク） |

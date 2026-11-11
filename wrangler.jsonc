@@ -6,6 +6,13 @@
 	"compatibility_date": "2026-10-23",
 	"compatibility_flags": ["nodejs_compat"],
 	"upload_source_maps": true,
+	// 入口は Custom Domain だけにする。Access はホスト名ごとに掛かり、アプリ側は認証を
+	// 持たないので、workers.dev やプレビュー URL を開けておくとそこが素通しになりうる。
+	// **Access アプリの Destinations にホスト名を足してからデプロイする**（逆順だと
+	// デプロイ直後は誰でも開ける）
+	"routes": [{ "pattern": "weight.fushihara.net", "custom_domain": true }],
+	"workers_dev": false,
+	"preview_urls": false,
 	// Workers Logs。cron の実行と console.log / console.error も記録される
 	"observability": {
 		"enabled": true,
