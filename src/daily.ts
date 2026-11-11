@@ -2,7 +2,16 @@ import health, { WeightRecord } from './health';
 import bluesky from './bluesky';
 import sheet from './sheet';
 import { getJPYRate } from './fx';
-import { AiComment, WeightContext, fallbackComment, formatComment, formatDiff, generateWithClaude } from './ai';
+import {
+	AiComment,
+	TEST_MODELS,
+	WeightContext,
+	buildUserMessage,
+	fallbackComment,
+	formatComment,
+	formatDiff,
+	generateWithClaude,
+} from './ai';
 import { addDays, jstDate, sameDayLastYear } from './date';
 
 const BSKY_POST_KEY_PREFIX = 'BSKY_POST_';
@@ -51,14 +60,20 @@ export async function getStreak(kv: KVNamespace): Promise<number> {
 	return streak ? parseInt(streak, 10) : 0;
 }
 
-async function updateStreak(kv: KVNamespace, day: string): Promise<number> {
+/** day に記録したときの連続記録の日数。changed は、KV に書き直す必要があるとき true */
+async function countStreak(kv: KVNamespace, day: string): Promise<{ streak: number; changed: boolean }> {
 	const [lastDate, current] = await Promise.all([kv.get(LAST_MEASUREMENT_KEY), getStreak(kv)]);
 	if (lastDate === day) {
-		return current;
+		return { streak: current, changed: false };
 	}
+	return { streak: lastDate === addDays(day, -1) ? current + 1 : 1, changed: true };
+}
 
-	const streak = lastDate === addDays(day, -1) ? current + 1 : 1;
-	await Promise.all([kv.put(STREAK_KEY, streak.toString()), kv.put(LAST_MEASUREMENT_KEY, day)]);
+async function updateStreak(kv: KVNamespace, day: string): Promise<number> {
+	const { streak, changed } = await countStreak(kv, day);
+	if (changed) {
+		await Promise.all([kv.put(STREAK_KEY, streak.toString()), kv.put(LAST_MEASUREMENT_KEY, day)]);
+	}
 	return streak;
 }
 
@@ -147,6 +162,16 @@ async function getRecentComments(kv: KVNamespace, day: string): Promise<RecentCo
 	return Array.isArray(saved) ? saved.filter((c) => c.day >= since && c.day < day) : [];
 }
 
+/** Claude に渡す最近のコメントの本文。材料の 1 つなので、読めなければ渡さずに生成する */
+async function recentCommentTexts(kv: KVNamespace, day: string): Promise<string[]> {
+	try {
+		return (await getRecentComments(kv, day)).map((c) => c.text);
+	} catch (e) {
+		console.error('[recent_comments]', e);
+		return [];
+	}
+}
+
 /**
  * 投稿したコメントを、最近のコメントの先頭に足す。Claude に渡して、同じ型が続かないようにするため。
  * 失敗してもエラーログに残すだけにする（投稿は済んでいる）。
@@ -167,14 +192,7 @@ async function addRecentComment(kv: KVNamespace, day: string, text: string, logP
  */
 async function createComment(env: Env, ctx: Omit<WeightContext, 'recentComments'>, logPrefix: string): Promise<AiComment> {
 	const kv = env.FIT2BSKY_KV;
-	// 最近のコメントは材料の 1 つなので、読めなくても渡さずに生成する
-	const recentComments = await getRecentComments(kv, ctx.day).then(
-		(recent) => recent.map((c) => c.text),
-		(e) => {
-			console.error('[recent_comments]', e);
-			return [];
-		},
-	);
+	const recentComments = await recentCommentTexts(kv, ctx.day);
 	try {
 		const comment = await generateWithClaude(env, { ...ctx, recentComments });
 		await saveComment(kv, ctx.day, comment, logPrefix);
@@ -183,6 +201,35 @@ async function createComment(env: Env, ctx: Omit<WeightContext, 'recentComments'
 		await logError(kv, `${logPrefix}ai_comment`, e);
 		return fallbackComment(ctx);
 	}
+}
+
+/** テスト生成で選べるもの。TEST_MODELS のどれかか、文例（template） */
+export type TestCommentSource = (typeof TEST_MODELS)[number] | 'template';
+
+export function isTestCommentSource(value: unknown): value is TestCommentSource {
+	return value === 'template' || TEST_MODELS.some((m) => m === value);
+}
+
+/**
+ * 今日の材料でコメントを試しに作る。ダッシュボードのテスト生成用。
+ * 本番のコメント、最近のコメント、連続記録は変えず、投稿もしない。失敗はそのまま例外にする（エラーログにも残さない）。
+ */
+export async function generateTestComment(env: Env, source: TestCommentSource): Promise<string> {
+	const kv = env.FIT2BSKY_KV;
+	const day = jstDate();
+	// 連続記録は書き込まずに数える（投稿の前に試しても、投稿のときと同じ日数にする）
+	const [weights, { streak: streakDays }, recentComments] = await Promise.all([
+		getWeights(env, day, 'all'),
+		countStreak(kv, day),
+		recentCommentTexts(kv, day),
+	]);
+	const ctx = { day, ...weights, targetWeight: parseFloat(env.TARGET_WEIGHT), streakDays, recentComments };
+	if (source === 'template') {
+		return formatComment(fallbackComment(ctx));
+	}
+	const comment = await generateWithClaude(env, ctx, source);
+	// 見出しは系統の名前だけなので、server-side fallback で作り直したかは model で見分ける
+	return `${formatComment(comment)}\n\n書いたモデル: ${comment.model}\n\n--- Claude に渡した材料 ---\n${buildUserMessage(ctx)}`;
 }
 
 export interface DailyResult {

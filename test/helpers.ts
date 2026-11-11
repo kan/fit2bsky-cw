@@ -222,13 +222,13 @@ export function mockClaude(
 			if (request.headers.get('authorization') !== 'Bearer anthropic-key') {
 				return HttpResponse.json({ type: 'error', error: { type: 'authentication_error', message: 'invalid x-api-key' } }, { status: 401 });
 			}
-			if (!request.headers.get('anthropic-beta')?.includes('server-side-fallback-2026-07-01')) {
+			const body = (await request.json()) as Record<string, unknown>;
+			if ('fallbacks' in body && !request.headers.get('anthropic-beta')?.includes('server-side-fallback-2026-07-01')) {
 				return HttpResponse.json(
 					{ type: 'error', error: { type: 'invalid_request_error', message: 'fallbacks needs the beta header' } },
 					{ status: 400 },
 				);
 			}
-			const body = (await request.json()) as Record<string, unknown>;
 			messages.push(body);
 			return reply(body);
 		}),

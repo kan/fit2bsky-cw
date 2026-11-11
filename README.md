@@ -50,6 +50,10 @@ Google Health API の OAuth2 の認証を行なう。事前にこれを実行し
 
 体重データを sheet に書き込む。1 日 1 回のみ実行される。
 
+### POST /comment/test
+
+今日の材料で、投稿に添えるコメントを試しに作って表示する。ダッシュボードから、Claude のモデル（本番のモデルと、その fallback 先）か文例を選んで実行する。作ったコメントは保存せず、投稿にも使わない。Claude を選ぶと API の料金がかかる。
+
 ### /weight
 
 Google Health API を叩いて当日（JST）の体重その他の測定データを JSON で返す。

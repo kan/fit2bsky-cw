@@ -248,3 +248,115 @@ describe('AI コメント', () => {
 		expect(messages).toHaveLength(0);
 	});
 });
+
+describe('コメントのテスト生成', () => {
+	function testForm(source: string): RequestInit {
+		return { ...FORM_POST, body: new URLSearchParams({ source }) };
+	}
+
+	/** 本番のコメント、最近のコメント、連続記録、投稿のフラグ。テスト生成はどれも変えない */
+	async function savedState(env: Env) {
+		const kv = env.FIT2BSKY_KV;
+		return Promise.all(
+			[`AI_COMMENT_${TODAY}`, 'RECENT_AI_COMMENTS', 'MEASUREMENT_STREAK', 'LAST_MEASUREMENT_DATE', `BSKY_POST_${TODAY}`].map((k) =>
+				kv.get(k),
+			),
+		);
+	}
+
+	it.each(['claude-opus-5', 'claude-opus-4-8'])('%s を選ぶと、server-side fallback を付けずにそのモデルで作る', async (model) => {
+		const { posts } = mockDaily(FOUR_DAYS);
+		const { messages } = mockClaude((body) => claudeText(JSON.stringify({ comment: CLAUDE_COMMENT }), 'end_turn', String(body.model)));
+		const env = await testEnv();
+
+		const res = await call(env, '/comment/test', testForm(model));
+
+		expect(res.status).toBe(200);
+		const text = await res.text();
+		expect(text.split('\n')[0]).toBe(`Claude Opus「${CLAUDE_COMMENT}」`);
+		// 見出しはどれも Claude Opus なので、書いたモデルの ID も出す
+		expect(text).toContain(`書いたモデル: ${model}`);
+		expect(text).toContain('前日との差: -0.5kg');
+		expect(messages[0]).toMatchObject({ model });
+		expect(messages[0]).not.toHaveProperty('fallbacks');
+		expect(posts).toHaveLength(0);
+		expect(await savedState(env)).toEqual([null, null, null, null, null]);
+	});
+
+	it('claude-opus-5-5 を選ぶと、本番と同じく server-side fallback を付け、作り直したモデルを出す', async () => {
+		mockDaily(FOUR_DAYS);
+		const { messages } = mockClaude(() => claudeText(JSON.stringify({ comment: CLAUDE_COMMENT }), 'end_turn', 'claude-opus-4-8'));
+		const res = await call(await testEnv(), '/comment/test', testForm('claude-opus-5-5'));
+
+		expect(res.status).toBe(200);
+		expect(messages[0]).toMatchObject({ model: 'claude-opus-5-5', fallbacks: 'default' });
+		expect(await res.text()).toContain('書いたモデル: claude-opus-4-8');
+	});
+
+	it('定型文を選ぶと、Claude を呼ばずに文例から選び、材料は出さない', async () => {
+		const { messages } = mockDaily(FOUR_DAYS);
+		const res = await call(await testEnv(), '/comment/test', testForm('template'));
+
+		expect(res.status).toBe(200);
+		expect(await res.text()).toMatch(/^定型文「[^\n]+」$/);
+		expect(messages).toHaveLength(0);
+	});
+
+	it('最近のコメントが読めなくても、渡さずに作る', async () => {
+		const { messages } = mockDaily(FOUR_DAYS);
+		const env = await testEnv();
+		await env.FIT2BSKY_KV.put('RECENT_AI_COMMENTS', '{壊れた JSON');
+
+		const res = await call(env, '/comment/test', testForm('claude-opus-5-5'));
+
+		expect(res.status).toBe(200);
+		expect((messages[0].messages as { content: string }[])[0].content).not.toContain('最近のコメント');
+	});
+
+	it('連続記録と最近のコメントは、投稿のときと同じものを渡し、書き換えない', async () => {
+		const { messages } = mockDaily(FOUR_DAYS);
+		const env = await testEnv();
+		const kv = env.FIT2BSKY_KV;
+		await kv.put('MEASUREMENT_STREAK', '41');
+		await kv.put('LAST_MEASUREMENT_DATE', '2026-11-06');
+		await kv.put('RECENT_AI_COMMENTS', JSON.stringify([{ day: '2026-11-06', text: '昨日のコメント' }]));
+
+		await call(env, '/comment/test', testForm('claude-opus-5-5'));
+
+		const user = (messages[0].messages as { content: string }[])[0].content;
+		expect(user).toContain('連続記録: 42日目');
+		expect(user).toContain('- 昨日のコメント');
+		expect(await kv.get('MEASUREMENT_STREAK')).toBe('41');
+		expect(await kv.get('LAST_MEASUREMENT_DATE')).toBe('2026-11-06');
+	});
+
+	it('Claude の生成に失敗したら 500 を返し、エラーログには残さない', async () => {
+		mockDaily(FOUR_DAYS);
+		mockClaude(() => claudeText('', 'refusal'));
+		const env = await testEnv();
+
+		const res = await call(env, '/comment/test', testForm('claude-opus-5'));
+
+		expect(res.status).toBe(500);
+		expect(await res.text()).toContain('stop_reason=refusal');
+		expect(await errorLogs(env)).toEqual([]);
+	});
+
+	it('選べないものを渡したら 400 を返し、Claude を呼ばない', async () => {
+		const { messages } = mockDaily(FOUR_DAYS);
+		const res = await call(await testEnv(), '/comment/test', testForm('claude-haiku-5-5'));
+
+		expect(res.status).toBe(400);
+		expect(messages).toHaveLength(0);
+	});
+
+	it('ダッシュボードに、モデルと定型文を選んで試すフォームを出す', async () => {
+		mockDaily(FOUR_DAYS);
+		const dashboard = await (await call(await testEnv(), '/')).text();
+
+		expect(dashboard).toContain('action="/comment/test"');
+		for (const value of ['claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-8', 'template']) {
+			expect(dashboard).toContain(`<option value="${value}">`);
+		}
+	});
+});

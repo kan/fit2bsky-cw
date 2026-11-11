@@ -6,6 +6,12 @@ import { fetchWithTimeout } from './http';
 /** コメントの生成に使うモデル。#8 で Workers AI、OpenAI、Claude Haiku と出力を比べて決めた */
 const MODEL = 'claude-opus-5-5';
 
+/**
+ * ダッシュボードのテスト生成で選べるモデル。MODEL と、MODEL の server-side fallback が作り直しに使えるモデル。
+ * fallback で作り直すモデルは拒否の種類で API が決めるので、試すときは直接指定する
+ */
+export const TEST_MODELS = [MODEL, 'claude-opus-5', 'claude-opus-4-8'] as const;
+
 /** コメントの上限の文字数（書記素で数える）。投稿全体を Bluesky の 300 字に収めるため */
 const MAX_COMMENT_LENGTH = 60;
 
@@ -19,6 +25,11 @@ const FALLBACK_LABEL = '定型文';
 export interface AiComment {
 	label: string;
 	text: string;
+}
+
+/** Claude が作ったコメント。model は応答を書いたモデルの ID（見出しは系統の名前だけなので、テスト生成で見分けるため） */
+export interface GeneratedComment extends AiComment {
+	model: string;
 }
 
 export interface WeightContext {
@@ -123,8 +134,9 @@ function graphemeLength(text: string): number {
 /**
  * Claude にその日のコメントを作らせる。使えない応答は例外にする。
  * 見出しは、実際に書いたモデル（server-side fallback で作り直したときは、そのモデル）にする。
+ * model はテスト生成で fallback のモデルを試すときに渡す。そのときは server-side fallback を使わない。
  */
-export async function generateWithClaude(env: Env, ctx: WeightContext): Promise<AiComment> {
+export async function generateWithClaude(env: Env, ctx: WeightContext, model: string = MODEL): Promise<GeneratedComment> {
 	// 生成は他の API より遅いので、待ちを長めにとる（SDK にも同じ長さを伝える）。再試行は 1 回までにする
 	const client = new Anthropic({
 		apiKey: env.ANTHROPIC_API_KEY,
@@ -134,9 +146,8 @@ export async function generateWithClaude(env: Env, ctx: WeightContext): Promise<
 	});
 	// 安全の判定で拒否されたら、API が拒否の種類に合う別のモデルで作り直す（server-side fallback）
 	const res = await client.beta.messages.create({
-		betas: ['server-side-fallback-2026-07-01'],
-		fallbacks: 'default',
-		model: MODEL,
+		...(model === MODEL ? { betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' as const } : {}),
+		model,
 		max_tokens: 4000,
 		system: SYSTEM_PROMPT,
 		messages: [{ role: 'user', content: buildUserMessage(ctx) }],
@@ -156,7 +167,7 @@ export async function generateWithClaude(env: Env, ctx: WeightContext): Promise<
 	if (length === 0 || length > MAX_COMMENT_LENGTH) {
 		throw Error(`AI comment: 長さが範囲外 (${length} 字): ${trimmed}`);
 	}
-	return { label: modelLabel(res.model), text: trimmed };
+	return { label: modelLabel(res.model), text: trimmed, model: res.model };
 }
 
 /** 生成に失敗したときの、文例からの選択 */

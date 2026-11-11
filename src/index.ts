@@ -4,7 +4,17 @@ import { csrf } from 'hono/csrf';
 import health from './health';
 import { getJPYRate } from './fx';
 import { jstDate } from './date';
-import { getDailyStatus, getErrorLogs, getSavedComment, getStreak, getTodayWeight, logError, runDaily } from './daily';
+import {
+	generateTestComment,
+	getDailyStatus,
+	getErrorLogs,
+	getSavedComment,
+	getStreak,
+	getTodayWeight,
+	isTestCommentSource,
+	logError,
+	runDaily,
+} from './daily';
 import { renderDashboard } from './dashboard';
 import { FAVICON_SVG } from './favicon';
 
@@ -54,6 +64,20 @@ app.post('/post', async (c) => {
 app.post('/sheet', async (c) => {
 	const result = await runDaily(c.env, { post: false });
 	return c.text(result.messages.join('\n'), result.ok ? 200 : 500);
+});
+
+// 今日の材料でコメントを試しに作る。保存も投稿もしない
+app.post('/comment/test', async (c) => {
+	const { source } = await c.req.parseBody();
+	if (!isTestCommentSource(source)) {
+		return c.text(`source が不正です: ${String(source)}`, 400);
+	}
+	try {
+		return c.text(await generateTestComment(c.env, source));
+	} catch (e) {
+		console.error('[comment_test]', e);
+		return c.text('Error: ' + e, 500);
+	}
 });
 
 app.get('/fx', async (c) => {

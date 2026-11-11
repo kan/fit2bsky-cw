@@ -1,7 +1,7 @@
 import { html, raw } from 'hono/html';
 import { WeightRecord } from './health';
 import { DailyStatus, formatFat } from './daily';
-import { AiComment, formatComment } from './ai';
+import { AiComment, TEST_MODELS, formatComment } from './ai';
 
 export interface DashboardProps {
 	day: string;
@@ -57,6 +57,8 @@ const STYLE = `
 	.links a:hover, .links button:hover { background: #1570d6; }
 	.links .secondary { background: #6b7280; }
 	.links .secondary:hover { background: #4b5563; }
+	.links select { padding: 10px; border: 1px solid #d1d5db; border-radius: 6px; font: inherit; font-size: 0.9em; }
+	.note { color: #666; font-size: 0.9em; margin-top: 0; }
 	.footer { text-align: center; margin-top: 30px; color: #888; font-size: 0.9em; }
 	.footer a { color: #1a85ff; }
 	.ai-comment {
@@ -162,6 +164,18 @@ export function renderDashboard(props: DashboardProps) {
 						<form method="post" action="/sheet"><button type="submit" class="secondary">シート書き込み</button></form>
 						<a href="/auth" class="secondary">Google Health認証</a>
 					</div>
+				</div>
+
+				<div class="card">
+					<h2>コメントのテスト生成</h2>
+					<p class="note">今日の材料で作ります。保存も投稿もしません（Claude を選ぶと API の料金がかかります）</p>
+					<form method="post" action="/comment/test" class="links">
+						<select name="source">
+							${TEST_MODELS.map((m) => html`<option value="${m}">${m}</option>`)}
+							<option value="template">定型文（src/comments.ts）</option>
+						</select>
+						<button type="submit" class="secondary">試しに作る</button>
+					</form>
 				</div>
 
 				<div class="card">

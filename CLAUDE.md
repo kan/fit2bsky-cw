@@ -53,6 +53,7 @@ workers.dev とプレビュー URL は `wrangler.jsonc` で閉じている。
 | `/oauth/callback` | OAuth2コールバック |
 | `POST /post` | Bluesky 投稿 + シート書き込み（各 1 日 1 回制限） |
 | `POST /sheet` | シートへの書き込みのみ（1 日 1 回制限） |
+| `POST /comment/test` | 今日の材料でコメントを試しに作る（フォームの `source` でモデルか `template` を選ぶ。保存も投稿もしない） |
 | `/fx` | ドル円レート表示 |
 | `/weight` | 体重データJSON |
 | `/status` | 本日の投稿・書き込み状況JSON |
@@ -87,6 +88,9 @@ workers.dev とプレビュー URL は `wrangler.jsonc` で閉じている。
 - 同じ型の言い回しが続かないように、投稿したコメントを KV の `RECENT_AI_COMMENTS` に直近 7 日分残し、次の生成で渡す
 - 作るのは投稿するときだけで、1 日 1 回。作ったコメントは KV の `AI_COMMENT_{date}` に保存し（見出しは metadata）、
   投稿の再試行とダッシュボードで使い回す。ダッシュボードは保存済みのものを表示するだけで、生成しない
+- ダッシュボードのテスト生成（`POST /comment/test`）は、`src/ai.ts` の `TEST_MODELS`（`MODEL` と、その fallback 先の
+  モデル）か文例で、今日の材料からコメントを作って返す。fallback 先のモデルは server-side fallback を付けずに直接呼ぶ。
+  KV（コメント、最近のコメント、連続記録）は書き換えず、失敗もエラーログに残さない
 - 安全の判定で拒否されたときは、API が別のモデルで作り直す（server-side fallback、`fallbacks: 'default'`）
 - API のエラー、作り直しも含めた拒否、60 字超え、JSON でない応答のときは `src/comments.ts` の文例から選んで投稿し、
   エラーログ（context は `ai_comment`）に残す。文例は投稿に成功したときだけ KV に保存する（投稿が失敗したら、
