@@ -1,6 +1,7 @@
 import { http, HttpResponse } from 'msw';
 import { describe, expect, it } from 'vitest';
-import { buildUserMessage } from '../src/ai';
+import { buildUserMessage, formatDiff } from '../src/ai';
+import { addDays } from '../src/date';
 import { network } from './network';
 import {
 	CLAUDE_COMMENT,
@@ -10,6 +11,7 @@ import {
 	claudeText,
 	errorLogs,
 	filterDay,
+	mockBluesky,
 	mockClaude,
 	mockDaily,
 	oneWeight,
@@ -28,6 +30,11 @@ const FOUR_DAYS = {
 	...oneWeight('2025-11-07', 130),
 };
 
+/** 投稿の末尾の 見出し「本文」 */
+function postedComment(post: string): string {
+	return post.split('\n').at(-1)!;
+}
+
 describe('AI コメント', () => {
 	it('Claude が作ったコメントで投稿し、ダッシュボードにも同じものを出す', async () => {
 		const { posts, messages } = mockDaily(FOUR_DAYS);
@@ -35,7 +42,8 @@ describe('AI コメント', () => {
 
 		await call(env, '/post', FORM_POST);
 
-		expect(posts[0]).toContain(`AI「${CLAUDE_COMMENT}」`);
+		expect(posts[0]).toContain('連続1日目 | 前日比 -0.5kg | 前年比 +4.0kg | 1$=150.3円');
+		expect(postedComment(posts[0])).toBe(`Claude Opus「${CLAUDE_COMMENT}」`);
 		expect(messages).toHaveLength(1);
 		expect(messages[0]).toMatchObject({
 			model: 'claude-opus-5-5',
@@ -45,9 +53,32 @@ describe('AI コメント', () => {
 		expect(await errorContexts(env)).toEqual([]);
 
 		const dashboard = await (await call(env, '/')).text();
-		expect(dashboard).toContain(CLAUDE_COMMENT);
+		expect(dashboard).toContain(`Claude Opus「${CLAUDE_COMMENT}」`);
 		// ダッシュボードは保存済みのコメントを読むだけで、生成し直さない
 		expect(messages).toHaveLength(1);
+	});
+
+	it('安全の判定で別のモデルが作り直したら、そのモデルを見出しにする', async () => {
+		const { posts } = mockDaily(FOUR_DAYS);
+		mockClaude(() => claudeText(JSON.stringify({ comment: CLAUDE_COMMENT }), 'end_turn', 'claude-sonnet-5-5'));
+		const env = await testEnv();
+
+		await call(env, '/post', FORM_POST);
+
+		expect(postedComment(posts[0])).toBe(`Claude Sonnet「${CLAUDE_COMMENT}」`);
+		expect(await (await call(env, '/')).text()).toContain(`Claude Sonnet「${CLAUDE_COMMENT}」`);
+	});
+
+	it.each([
+		[134.04, 134, '0.0kg'],
+		[133.96, 134, '0.0kg'],
+		// どちらも 134.0kg と出るので、差も 0.0kg にする
+		[134.04, 133.96, '0.0kg'],
+		[134.3, 134, '+0.3kg'],
+		[128.8, 134, '-5.2kg'],
+	])('今日 %d kg、過去 %d kg の差は %s', (today, past, expected) => {
+		const record = (w: number) => ({ date: TODAY, time: '07:00:00', weight: w, fat: null, bmi: 34 });
+		expect(formatDiff(record(today), record(past))).toBe(expected);
 	});
 
 	it('前日、1 か月前、1 年前との差と、目標までの残りを渡す', async () => {
@@ -73,15 +104,55 @@ describe('AI コメント', () => {
 			oneYearAgo: null,
 			targetWeight: 120,
 			streakDays: 3,
+			recentComments: [],
 		});
 		expect(text).toContain('前日との差: 記録なし');
 		expect(text).toContain('目標体重 120.0kg を 1.5kg 下回っている');
+		expect(text).not.toContain('最近のコメント');
 	});
 
 	it('目標との差が丸めて 0.0kg なら「ちょうど」と渡す', () => {
 		const current = { date: TODAY, time: '07:00:00', weight: 120.03, fat: null, bmi: 34 };
-		const ctx = { day: TODAY, current, yesterday: null, oneMonthAgo: null, oneYearAgo: null, targetWeight: 120, streakDays: 3 };
+		const ctx = {
+			day: TODAY,
+			current,
+			yesterday: null,
+			oneMonthAgo: null,
+			oneYearAgo: null,
+			targetWeight: 120,
+			streakDays: 3,
+			recentComments: [],
+		};
 		expect(buildUserMessage(ctx)).toContain('目標体重 120.0kg ちょうど');
+	});
+
+	it('最近 7 日分のコメントを新しい順に渡し、投稿したコメントを先頭に足す', async () => {
+		const { messages } = mockDaily(FOUR_DAYS);
+		const env = await testEnv();
+		const entry = (n: number) => ({ day: addDays(TODAY, -n), text: `${n} 日前のコメント` });
+		const lastWeek = [1, 2, 3, 4, 5, 6, 7].map(entry);
+		// 今日の分（二重に投稿したときの名残）と、8 日前の分は渡さない
+		await env.FIT2BSKY_KV.put('RECENT_AI_COMMENTS', JSON.stringify([entry(0), ...lastWeek, entry(8)]));
+
+		await call(env, '/post', FORM_POST);
+
+		const user = (messages[0].messages as { content: string }[])[0].content;
+		expect(user).toContain(['最近のコメント（新しい順。これらと型が重ならないように）:', ...lastWeek.map((c) => `- ${c.text}`)].join('\n'));
+		expect(user).not.toContain('0 日前のコメント');
+		expect(user).not.toContain('8 日前のコメント');
+		// 次の日に 7 日前になる分は、次の日の読み出しで落ちる
+		expect(await env.FIT2BSKY_KV.get('RECENT_AI_COMMENTS', 'json')).toEqual([{ day: TODAY, text: CLAUDE_COMMENT }, ...lastWeek]);
+	});
+
+	it('最近のコメントが読めなくても、Claude に作らせる', async () => {
+		const { posts, messages } = mockDaily(FOUR_DAYS);
+		const env = await testEnv();
+		await env.FIT2BSKY_KV.put('RECENT_AI_COMMENTS', '{}');
+
+		await call(env, '/post', FORM_POST);
+
+		expect(messages).toHaveLength(1);
+		expect(postedComment(posts[0])).toBe(`Claude Opus「${CLAUDE_COMMENT}」`);
 	});
 
 	it.each([
@@ -92,7 +163,7 @@ describe('AI コメント', () => {
 		const { posts } = mockDaily(FOUR_DAYS);
 		mockClaude(() => claudeText(JSON.stringify({ comment: raw })));
 		await call(await testEnv(), '/post', FORM_POST);
-		expect(posts[0]).toContain(`AI「${posted}」`);
+		expect(postedComment(posts[0])).toBe(`Claude Opus「${posted}」`);
 	});
 
 	it.each([
@@ -113,14 +184,14 @@ describe('AI コメント', () => {
 
 		expect(res.status).toBe(200);
 		expect(posts).toHaveLength(1);
-		expect(posts[0]).toMatch(/AI「.+」$/);
+		expect(postedComment(posts[0])).toMatch(/^定型文「.+」$/);
 		expect(posts[0]).not.toContain(CLAUDE_COMMENT);
 		const errors = await errorContexts(env);
 		expect(errors).toHaveLength(1);
 		expect(errors[0]).toMatch(/^ai_comment: /);
 		expect(errors[0]).toContain(logged);
 		// 投稿した文例は、ダッシュボードに出すために保存する
-		expect(await (await call(env, '/')).text()).toContain(posts[0].match(/AI「(.+)」$/)![1]);
+		expect(await (await call(env, '/')).text()).toContain(postedComment(posts[0]));
 	});
 
 	it('生成も投稿も失敗したら文例は保存せず、次の実行で Claude に作り直させる', async () => {
@@ -137,19 +208,36 @@ describe('AI コメント', () => {
 		expect(messages).toHaveLength(1);
 	});
 
-	it('投稿に失敗したら、次の実行では保存したコメントを使い、生成し直さず過去の体重も取らない', async () => {
-		const { posts, messages, requests } = mockDaily(FOUR_DAYS, { bskyFail: true });
+	it('投稿に失敗したら、次の実行では保存したコメントと見出しを使い、生成し直さない', async () => {
+		const { requests } = mockDaily(FOUR_DAYS, { bskyFail: true });
+		const first = mockClaude(() => claudeText(JSON.stringify({ comment: CLAUDE_COMMENT }), 'end_turn', 'claude-sonnet-5-5'));
 		const env = await testEnv();
 		await call(env, '/post', FORM_POST);
-		expect(posts).toHaveLength(0);
+		expect(await env.FIT2BSKY_KV.get('RECENT_AI_COMMENTS')).toBeNull();
 		requests.length = 0;
 
-		network.use(http.post('https://bsky.social/xrpc/com.atproto.repo.createRecord', () => HttpResponse.json({ uri: 'at://x', cid: 'y' })));
+		const retry = mockClaude();
+		const { posts } = mockBluesky();
 		await call(env, '/post', FORM_POST);
 
-		expect(messages).toHaveLength(1);
-		// 体重と体脂肪率の、今日の分だけ
-		expect(requests.map(filterDay)).toEqual([TODAY, TODAY]);
+		expect(first.messages).toHaveLength(1);
+		expect(retry.messages).toHaveLength(0);
+		expect(postedComment(posts[0])).toBe(`Claude Sonnet「${CLAUDE_COMMENT}」`);
+		// 投稿に出す差のために前日と 1 年前は取るが、コメントにだけ使う 1 か月前は取らない
+		expect(requests.map(filterDay).sort()).toEqual(['2025-11-07', '2026-11-06', TODAY, TODAY]);
+		expect(posts[0]).toContain('前日比 -0.5kg | 前年比 +4.0kg');
+		expect(await env.FIT2BSKY_KV.get('RECENT_AI_COMMENTS', 'json')).toEqual([{ day: TODAY, text: CLAUDE_COMMENT }]);
+	});
+
+	it('見出しを保存する前に作ったコメントは、見出しを AI にする', async () => {
+		const { posts, messages } = mockDaily(FOUR_DAYS);
+		const env = await testEnv();
+		await env.FIT2BSKY_KV.put(`AI_COMMENT_${TODAY}`, '前のコメント');
+
+		await call(env, '/post', FORM_POST);
+
+		expect(messages).toHaveLength(0);
+		expect(postedComment(posts[0])).toBe('AI「前のコメント」');
 	});
 
 	it('まだ作っていない日は、ダッシュボードにコメントを出さず、生成もしない', async () => {

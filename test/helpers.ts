@@ -236,13 +236,13 @@ export function mockClaude(
 	return { messages };
 }
 
-/** Messages API の応答。text を 1 つの text ブロックで返す */
-export function claudeText(text: string, stopReason = 'end_turn'): Response {
+/** Messages API の応答。text を 1 つの text ブロックで返す。model は応答を書いたモデル（server-side fallback で変わる） */
+export function claudeText(text: string, stopReason = 'end_turn', model = 'claude-opus-5-5'): Response {
 	return HttpResponse.json({
 		id: 'msg_test',
 		type: 'message',
 		role: 'assistant',
-		model: 'claude-opus-5-5',
+		model,
 		content: [{ type: 'text', text }],
 		stop_reason: stopReason,
 		stop_sequence: null,

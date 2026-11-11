@@ -12,6 +12,15 @@ const MAX_COMMENT_LENGTH = 60;
 /** 1 回の生成を待つ時間。比較のときの実測は平均 1.8 秒 */
 const CLAUDE_TIMEOUT_MS = 30_000;
 
+/** 文例から選んだときの見出し */
+const FALLBACK_LABEL = '定型文';
+
+/** 投稿の末尾に 見出し「本文」の形で添えるコメント。見出しは、コメントを書いたもの */
+export interface AiComment {
+	label: string;
+	text: string;
+}
+
 export interface WeightContext {
 	/** JST の YYYY-MM-DD */
 	day: string;
@@ -21,20 +30,24 @@ export interface WeightContext {
 	oneYearAgo: WeightRecord | null;
 	targetWeight: number;
 	streakDays: number;
+	/** 最近の投稿に添えたコメント。新しい順 */
+	recentComments: string[];
 }
 
 const SYSTEM_PROMPT = `あなたは、本人の毎朝の体重を Bluesky に自動で投稿する bot の、ひとことコメントの担当です。
-投稿の末尾に AI「…」の形で添える 1 文を書きます。
+投稿の末尾に、書いたモデルの名前を見出しにして「…」の形で添える 1 文を書きます。
 
 読者と目的: 投稿者本人は、自分の体重をいじるブラックジョークを気に入っていて、毎朝それを楽しみにしています。フォロワーも読む公開の投稿です。
-トーン: 皮肉、上から目線、からかいは歓迎します。増えた日は辛口に、減った日は素直に褒めずに疑ってかかる、という今までの調子を保ってください。
+投稿の形: コメントの上には、今日の体重、BMI、体脂肪率、連続記録の日数、前日比、前年比が数字で出ています。
+トーン: 皮肉、上から目線、からかいは歓迎します。増えた日は辛口に、減った日も手放しでは褒めない調子を保ってください。
 避けること: 容姿そのものの侮辱、病気や死、摂食障害、絶食や極端な減量を勧めること。公開の投稿で、本人以外も読むためです。
-材料: 渡す数値（前日や 1 か月前、1 年前との差、目標までの残り、連続記録の日数、曜日、季節）から、その日らしさが出るものを 1 つか 2 つ選んで使ってください。数字を並べるだけにはしないでください。記録の無い項目には触れないでください。
+材料: 前日比と前年比は読者が本文の数字で読めるので、その数字を言い直すだけのコメントにはしないでください。差に触れるなら、その差が何を意味するかで皮肉ってください。本文に出ていない材料（1 か月前との差、目標までの残り、曜日、季節）から、その日らしさが出るものを 1 つか 2 つ選ぶのも歓迎します。記録の無い項目には触れないでください。
+言い回し: 毎朝読まれるので、同じ型が続くと飽きられます。最近のコメントを渡したときは、それと書き出し、文末、文の型が重ならないようにしてください。減った日に「珍しい」「奇跡」と意外がる型に偏りやすいので、ほかの切り口も使ってください。
 形式: 日本語の 1 文、${MAX_COMMENT_LENGTH} 文字以内。かぎかっこ、絵文字、ハッシュタグは付けず、コメントの本文だけを返してください。
 
 今までの文例です（調子の参考で、これをなぞる必要はありません）:
-- 増えた日: 重力との友情が2.1kg分深まりましたね / 「一口だけ」が積もり積もって1.5kgですか / 夜食は記憶に残らなくても体重に残りますよ
-- 減った日: やればできる子でしたか。0.8kg分見直しました / 奇跡は続くものではありませんが、期待しておきます / 体重計「信じていいの…？」
+- 増えた日: 夜食は記憶に残らなくても体重に残りますよ / 「一口だけ」が積もり積もった結果ですね / 重力との友情が深まる一方ですね
+- 減った日: やればできる子でしたか。少し見直しました / 体重計「信じていいの…？」 / 目標まではまだ遠いので、浮かれるのは早いですよ
 - 変わらない日: 安定という名の停滞、お見事です / 測るだけでは痩せませんよ / 動かざること山の如し、ですか`;
 
 const COMMENT_SCHEMA = {
@@ -53,12 +66,23 @@ function season(month: number): string {
 	return '冬';
 }
 
-function diff(current: WeightRecord, past: WeightRecord | null): string {
+/** 過去の体重との差（+0.3kg / -5.2kg / 0.0kg）。過去の記録が無ければ null */
+export function formatDiff(current: WeightRecord, past: WeightRecord | null): string | null {
 	if (!past) {
-		return '記録なし';
+		return null;
 	}
-	const d = current.weight - past.weight;
+	// 投稿に出す小数 1 桁の体重どうしの差にする（134.04 と 133.96 は、どちらも 134.0kg と出るので 0.0kg）
+	const d = (Math.round(current.weight * 10) - Math.round(past.weight * 10)) / 10;
 	return `${d > 0 ? '+' : ''}${d.toFixed(1)}kg`;
+}
+
+/** 投稿とダッシュボードに出す 見出し「本文」 */
+export function formatComment(comment: AiComment): string {
+	return `${comment.label}「${comment.text}」`;
+}
+
+function diff(current: WeightRecord, past: WeightRecord | null): string {
+	return formatDiff(current, past) ?? '記録なし';
 }
 
 /** モデルに渡すその日の材料 */
@@ -80,15 +104,27 @@ export function buildUserMessage(ctx: WeightContext): string {
 				? `${target} を ${(-toTarget).toFixed(1)}kg 下回っている`
 				: `${target} ちょうど`,
 		`連続記録: ${ctx.streakDays}日目`,
+		...(ctx.recentComments.length > 0
+			? ['', '最近のコメント（新しい順。これらと型が重ならないように）:', ...ctx.recentComments.map((c) => `- ${c}`)]
+			: []),
 	].join('\n');
+}
+
+/** モデルの ID から見出しを作る（claude-opus-5-5 → Claude Opus） */
+function modelLabel(model: string): string {
+	const family = /^claude-([a-z]+)/.exec(model)?.[1];
+	return family ? `Claude ${family[0].toUpperCase()}${family.slice(1)}` : 'Claude';
 }
 
 function graphemeLength(text: string): number {
 	return [...new Intl.Segmenter('ja', { granularity: 'grapheme' }).segment(text)].length;
 }
 
-/** Claude にその日のコメントを作らせる。使えない応答は例外にする */
-export async function generateWithClaude(env: Env, ctx: WeightContext): Promise<string> {
+/**
+ * Claude にその日のコメントを作らせる。使えない応答は例外にする。
+ * 見出しは、実際に書いたモデル（server-side fallback で作り直したときは、そのモデル）にする。
+ */
+export async function generateWithClaude(env: Env, ctx: WeightContext): Promise<AiComment> {
 	// 生成は他の API より遅いので、待ちを長めにとる（SDK にも同じ長さを伝える）。再試行は 1 回までにする
 	const client = new Anthropic({
 		apiKey: env.ANTHROPIC_API_KEY,
@@ -114,16 +150,16 @@ export async function generateWithClaude(env: Env, ctx: WeightContext): Promise<
 	if (typeof comment !== 'string') {
 		throw Error('AI comment: 応答に comment が無い');
 	}
-	// 全体を 1 組の「」で囲んだときだけ外す（投稿で AI「…」の中に入れるため）。中に別の「」があれば、そのまま
+	// 全体を 1 組の「」で囲んだときだけ外す（投稿で 見出し「…」の中に入れるため）。中に別の「」があれば、そのまま
 	const trimmed = comment.trim().replace(/^「([^「」]*)」$/, '$1');
 	const length = graphemeLength(trimmed);
 	if (length === 0 || length > MAX_COMMENT_LENGTH) {
 		throw Error(`AI comment: 長さが範囲外 (${length} 字): ${trimmed}`);
 	}
-	return trimmed;
+	return { label: modelLabel(res.model), text: trimmed };
 }
 
 /** 生成に失敗したときの、文例からの選択 */
-export function fallbackComment(ctx: WeightContext): string {
-	return selectComment(ctx.oneMonthAgo ? ctx.current.weight - ctx.oneMonthAgo.weight : null);
+export function fallbackComment(ctx: Pick<WeightContext, 'current' | 'oneMonthAgo'>): AiComment {
+	return { label: FALLBACK_LABEL, text: selectComment(ctx.oneMonthAgo ? ctx.current.weight - ctx.oneMonthAgo.weight : null) };
 }

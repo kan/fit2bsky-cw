@@ -72,7 +72,8 @@ describe('POST /post', () => {
 		expect(requests.map(filterDay).sort()).toEqual(['2025-11-07', '2026-10-08', '2026-11-06', TODAY, TODAY]);
 		expect(posts).toHaveLength(1);
 		expect(posts[0]).toContain('今日の体重: 134.0kg (BMI: 38.53) 体脂肪率: 33.03%');
-		expect(posts[0]).toContain('連続1日目 | 1$=150.3円');
+		// 前日と 1 年前の記録が無いので、差は「-」
+		expect(posts[0]).toContain('連続1日目 | 前日比 - | 前年比 - | 1$=150.3円');
 		// 2016-05-02 からの日数が行番号
 		expect(writes).toEqual([{ range: 'weight!D3841', values: [[134]] }]);
 

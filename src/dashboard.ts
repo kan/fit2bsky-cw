@@ -1,6 +1,7 @@
 import { html, raw } from 'hono/html';
 import { WeightRecord } from './health';
 import { DailyStatus, formatFat } from './daily';
+import { AiComment, formatComment } from './ai';
 
 export interface DashboardProps {
 	day: string;
@@ -10,7 +11,7 @@ export interface DashboardProps {
 	targetWeight: number;
 	weight: WeightRecord | null;
 	weightError: string | null;
-	aiComment: string | null;
+	aiComment: AiComment | null;
 }
 
 const STYLE = `
@@ -110,7 +111,7 @@ function weightCard(props: DashboardProps) {
 				<td>${streakDays} 日</td>
 			</tr>
 		</table>
-		${aiComment ? html`<div class="ai-comment">💬 ${aiComment}</div>` : ''}`;
+		${aiComment ? html`<div class="ai-comment">💬 ${formatComment(aiComment)}</div>` : ''}`;
 }
 
 /** ダッシュボードの HTML。埋め込む値は html タグがエスケープする。 */

@@ -2,13 +2,18 @@ import health, { WeightRecord } from './health';
 import bluesky from './bluesky';
 import sheet from './sheet';
 import { getJPYRate } from './fx';
-import { WeightContext, fallbackComment, generateWithClaude } from './ai';
+import { AiComment, WeightContext, fallbackComment, formatComment, formatDiff, generateWithClaude } from './ai';
 import { addDays, jstDate, sameDayLastYear } from './date';
 
 const BSKY_POST_KEY_PREFIX = 'BSKY_POST_';
 const SHEET_WRITE_KEY_PREFIX = 'SHEET_WRITE_';
 const ERROR_LOG_KEY_PREFIX = 'ERROR_LOG_';
 const AI_COMMENT_KEY_PREFIX = 'AI_COMMENT_';
+const RECENT_COMMENTS_KEY = 'RECENT_AI_COMMENTS';
+/** Claude に渡す最近のコメントの日数 */
+const RECENT_COMMENTS_DAYS = 7;
+/** KV の metadata に見出しが無いときの見出し（見出しを保存する前に作ったコメント） */
+const LEGACY_LABEL = 'AI';
 const STREAK_KEY = 'MEASUREMENT_STREAK';
 const LAST_MEASUREMENT_KEY = 'LAST_MEASUREMENT_DATE';
 
@@ -61,14 +66,23 @@ export function formatFat(fat: number | null): string {
 	return fat !== null ? `${fat.toFixed(2)}%` : '-';
 }
 
-function formatPostMessage(weight: WeightRecord, streakDays: number, jpy: number, aiComment: string): string {
-	return `今日の体重: ${weight.weight.toFixed(1)}kg (BMI: ${weight.bmi.toFixed(2)}) 体脂肪率: ${formatFat(weight.fat)}
-連続${streakDays}日目 | 1$=${jpy.toFixed(1)}円
+type Weights = Pick<WeightContext, 'current' | 'yesterday' | 'oneMonthAgo' | 'oneYearAgo'>;
 
-AI「${aiComment}」`;
+function formatPostMessage(weights: Weights, streakDays: number, jpy: number, comment: AiComment): string {
+	const { current, yesterday, oneYearAgo } = weights;
+	return `今日の体重: ${current.weight.toFixed(1)}kg (BMI: ${current.bmi.toFixed(2)}) 体脂肪率: ${formatFat(current.fat)}
+連続${streakDays}日目 | 前日比 ${formatDiff(current, yesterday) ?? '-'} | 前年比 ${formatDiff(current, oneYearAgo) ?? '-'} | 1$=${jpy.toFixed(1)}円
+
+${formatComment(comment)}`;
 }
 
-type Weights = Pick<WeightContext, 'current' | 'yesterday' | 'oneMonthAgo' | 'oneYearAgo'>;
+/**
+ * 今日と一緒に取る過去の体重。
+ * none: 取らない（シートへの書き込みだけのとき）
+ * post: 投稿に出す前日と 1 年前だけ（作り済みのコメントで投稿し直すとき）
+ * all: コメントの材料の 1 か月前も取る
+ */
+type PastWeights = 'none' | 'post' | 'all';
 
 /** 今日の体重を取る。 */
 export async function getTodayWeight(env: Env, day: string): Promise<WeightRecord> {
@@ -76,15 +90,14 @@ export async function getTodayWeight(env: Env, day: string): Promise<WeightRecor
 }
 
 /**
- * 今日の体重と、コメントの生成に使う前日、1 か月前、1 年前の体重を並列に取る。access token は 1 回だけ取る。
- * withPast が false なら過去の体重は取らない（シートへの書き込みだけのときと、コメントを作り済みのとき）。
+ * 今日の体重と、pastWeights で選んだ過去の体重を並列に取る。access token は 1 回だけ取る。
  * 過去の体重は差にだけ使うので体脂肪率は取らず、取れなければ null にする。
- * 記録が無い以外の理由で取れなかったときは、Workers Logs にだけ残す（コメントの材料が減るだけなので）。
+ * 記録が無い以外の理由で取れなかったときは、Workers Logs にだけ残す（差が「-」になり、コメントの材料が減るだけなので）。
  */
-async function getWeights(env: Env, day: string, withPast: boolean): Promise<Weights> {
+async function getWeights(env: Env, day: string, pastWeights: PastWeights): Promise<Weights> {
 	const token = await health.getAccessToken(env);
-	const past = async (pastDay: string): Promise<WeightRecord | null> => {
-		if (!withPast) {
+	const past = async (pastDay: string, needed: boolean): Promise<WeightRecord | null> => {
+		if (!needed) {
 			return null;
 		}
 		try {
@@ -98,36 +111,72 @@ async function getWeights(env: Env, day: string, withPast: boolean): Promise<Wei
 	};
 	const [current, yesterday, oneMonthAgo, oneYearAgo] = await Promise.all([
 		health.getWeight(env, token, day),
-		past(addDays(day, -1)),
-		past(addDays(day, -30)),
-		past(sameDayLastYear(day)),
+		past(addDays(day, -1), pastWeights !== 'none'),
+		past(addDays(day, -30), pastWeights === 'all'),
+		past(sameDayLastYear(day), pastWeights !== 'none'),
 	]);
 	return { current, yesterday, oneMonthAgo, oneYearAgo };
 }
 
 /** その日のコメントを読む。まだ作っていなければ null。ダッシュボードはこれだけを表示する。 */
-export async function getSavedComment(kv: KVNamespace, day: string): Promise<string | null> {
-	return kv.get(`${AI_COMMENT_KEY_PREFIX}${day}`);
+export async function getSavedComment(kv: KVNamespace, day: string): Promise<AiComment | null> {
+	// 見出しは本文と一緒に metadata へ保存している
+	const { value, metadata } = await kv.getWithMetadata<{ label?: string }>(`${AI_COMMENT_KEY_PREFIX}${day}`);
+	return value === null ? null : { label: metadata?.label ?? LEGACY_LABEL, text: value };
 }
 
 /** その日のコメントを保存する。失敗してもエラーログに残すだけで、投稿は止めない。 */
-async function saveComment(kv: KVNamespace, day: string, comment: string, logPrefix: string): Promise<void> {
+async function saveComment(kv: KVNamespace, day: string, comment: AiComment, logPrefix: string): Promise<void> {
 	try {
-		await kv.put(`${AI_COMMENT_KEY_PREFIX}${day}`, comment, { expirationTtl: 86400 });
+		await kv.put(`${AI_COMMENT_KEY_PREFIX}${day}`, comment.text, { expirationTtl: 86400, metadata: { label: comment.label } });
 	} catch (e) {
 		await logError(kv, `${logPrefix}ai_comment_save`, e).catch(() => {});
 	}
 }
 
+interface RecentComment {
+	day: string;
+	text: string;
+}
+
+/** day より前の、直近 RECENT_COMMENTS_DAYS 日に投稿したコメント。新しい順 */
+async function getRecentComments(kv: KVNamespace, day: string): Promise<RecentComment[]> {
+	const saved = await kv.get<RecentComment[]>(RECENT_COMMENTS_KEY, 'json');
+	const since = addDays(day, -RECENT_COMMENTS_DAYS);
+	// YYYY-MM-DD は文字列のまま比べられる
+	return Array.isArray(saved) ? saved.filter((c) => c.day >= since && c.day < day) : [];
+}
+
 /**
- * その日のコメントを Claude に作らせる。作れたら保存し、投稿の再試行で使い回す。
+ * 投稿したコメントを、最近のコメントの先頭に足す。Claude に渡して、同じ型が続かないようにするため。
+ * 失敗してもエラーログに残すだけにする（投稿は済んでいる）。
+ */
+async function addRecentComment(kv: KVNamespace, day: string, text: string, logPrefix: string): Promise<void> {
+	try {
+		const recent = await getRecentComments(kv, day);
+		await kv.put(RECENT_COMMENTS_KEY, JSON.stringify([{ day, text }, ...recent]));
+	} catch (e) {
+		await logError(kv, `${logPrefix}recent_comments_save`, e).catch(() => {});
+	}
+}
+
+/**
+ * その日のコメントを Claude に作らせる。最近のコメントも渡す。作れたら保存し、投稿の再試行で使い回す。
  * 生成に失敗したら文例から選び、その失敗をエラーログに残す（投稿は止めない）。文例はここでは保存しない。
  * 再試行のときに、Claude で作り直せるようにするため。
  */
-async function createComment(env: Env, ctx: WeightContext, logPrefix: string): Promise<string> {
+async function createComment(env: Env, ctx: Omit<WeightContext, 'recentComments'>, logPrefix: string): Promise<AiComment> {
 	const kv = env.FIT2BSKY_KV;
+	// 最近のコメントは材料の 1 つなので、読めなくても渡さずに生成する
+	const recentComments = await getRecentComments(kv, ctx.day).then(
+		(recent) => recent.map((c) => c.text),
+		(e) => {
+			console.error('[recent_comments]', e);
+			return [];
+		},
+	);
 	try {
-		const comment = await generateWithClaude(env, ctx);
+		const comment = await generateWithClaude(env, { ...ctx, recentComments });
 		await saveComment(kv, ctx.day, comment, logPrefix);
 		return comment;
 	} catch (e) {
@@ -176,11 +225,11 @@ async function runDailyTasks(env: Env, post: boolean, logPrefix: string, message
 		return true;
 	}
 
-	// 投稿の再試行では、作り済みのコメントを使う。そのときは過去の体重を取らない
+	// 投稿の再試行では、作り済みのコメントを使う。そのときは投稿に出す差の分だけ過去の体重を取る
 	const savedComment = doPost ? await getSavedComment(kv, day) : null;
 	let weights;
 	try {
-		weights = await getWeights(env, day, doPost && savedComment === null);
+		weights = await getWeights(env, day, !doPost ? 'none' : savedComment === null ? 'all' : 'post');
 	} catch (e) {
 		await logError(kv, `${logPrefix}health_get_weight`, e);
 		messages.push(`体重の取得: エラー - ${e}`);
@@ -193,15 +242,16 @@ async function runDailyTasks(env: Env, post: boolean, logPrefix: string, message
 	if (doPost) {
 		try {
 			const jpy = await getJPYRate();
-			const aiComment =
+			const comment =
 				savedComment ?? (await createComment(env, { day, ...weights, targetWeight: parseFloat(env.TARGET_WEIGHT), streakDays }, logPrefix));
-			await bluesky.postMessage(env, formatPostMessage(current, streakDays, jpy, aiComment));
+			await bluesky.postMessage(env, formatPostMessage(weights, streakDays, jpy, comment));
 			await kv.put(`${BSKY_POST_KEY_PREFIX}${day}`, 'posted', { expirationTtl: 86400 });
 			// 投稿したコメントをダッシュボードに出すため。文例を使ったときは、ここで初めて保存する
 			if (savedComment === null) {
-				await saveComment(kv, day, aiComment, logPrefix);
+				await saveComment(kv, day, comment, logPrefix);
 			}
-			messages.push('Bluesky: 投稿完了', `AIコメント: ${aiComment}`);
+			await addRecentComment(kv, day, comment.text, logPrefix);
+			messages.push('Bluesky: 投稿完了', `コメント: ${formatComment(comment)}`);
 		} catch (e) {
 			await logError(kv, `${logPrefix}bluesky_post`, e);
 			messages.push(`Bluesky: エラー - ${e}`);
