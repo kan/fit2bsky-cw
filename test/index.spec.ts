@@ -226,7 +226,24 @@ describe('GET /errors', () => {
 	});
 });
 
+describe('GET /favicon.svg', () => {
+	it.each(['/favicon.svg', '/favicon.ico'])('%s は SVG を image/svg+xml で返す', async (path) => {
+		const res = await call(await testEnv(), path);
+
+		expect(res.status).toBe(200);
+		expect(res.headers.get('Content-Type')).toBe('image/svg+xml');
+		expect(await res.text()).toMatch(/^<svg /);
+	});
+});
+
 describe('GET /', () => {
+	it('favicon を参照する', async () => {
+		mockHealth(oneWeight());
+		const res = await call(await testEnv(), '/');
+
+		expect(await res.text()).toContain('<link rel="icon" href="/favicon.svg" type="image/svg+xml" />');
+	});
+
 	it('外部 API のエラー文をエスケープして表示する', async () => {
 		network.use(http.post(GOOGLE_TOKEN_URL, () => HttpResponse.text('<script>alert(1)</script>', { status: 500 })));
 		const res = await call(await testEnv(), '/');

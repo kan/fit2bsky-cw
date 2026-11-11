@@ -19,6 +19,7 @@ src/
 ├── index.ts      # エントリーポイント、ルーティング、cronハンドラ
 ├── daily.ts      # その日の処理（体重取得・投稿・シート書き込み）とKVのフラグ。/post・/sheet・cron で共有
 ├── dashboard.ts  # ダッシュボードのHTML（hono/html でエスケープ）
+├── favicon.ts    # favicon の SVG（wrangler は既定では .svg をモジュールとして読めないので文字列で持つ）
 ├── health.ts     # Google Health API連携（Google OAuth2、体重・体脂肪率の取得、BMIの計算）
 ├── date.ts       # JSTの日付の計算
 ├── ai.ts         # 投稿に添えるAIコメントの生成（Claude のプロンプトと応答の検査）
@@ -44,6 +45,7 @@ src/
 | パス | 説明 |
 |------|------|
 | `/` | ダッシュボード（ステータス・体重データ・各機能へのリンク） |
+| `/favicon.svg` | ダッシュボードの favicon（`/favicon.ico` も同じ SVG を返す） |
 | `/auth` | Google Health API の OAuth2 認証開始 |
 | `/oauth/callback` | OAuth2コールバック |
 | `POST /post` | Bluesky 投稿 + シート書き込み（各 1 日 1 回制限） |

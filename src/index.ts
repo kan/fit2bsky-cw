@@ -6,6 +6,7 @@ import { getJPYRate } from './fx';
 import { jstDate } from './date';
 import { getDailyStatus, getErrorLogs, getSavedComment, getStreak, getTodayWeight, logError, runDaily } from './daily';
 import { renderDashboard } from './dashboard';
+import { FAVICON_SVG } from './favicon';
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -85,6 +86,14 @@ app.get('/weight', async (c) => {
 		return c.text('Error: ' + e, 500);
 	}
 });
+
+// <link> を見ずに /favicon.ico を取りに来るクライアントにも同じ SVG を返す
+app.on('GET', ['/favicon.svg', '/favicon.ico'], (c) =>
+	c.body(FAVICON_SVG, 200, {
+		'Content-Type': 'image/svg+xml',
+		'Cache-Control': 'public, max-age=86400',
+	}),
+);
 
 app.get('/', async (c) => {
 	const kv = c.env.FIT2BSKY_KV;

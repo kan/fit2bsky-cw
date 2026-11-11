@@ -122,6 +122,7 @@ export function renderDashboard(props: DashboardProps) {
 				<meta charset="UTF-8" />
 				<meta name="viewport" content="width=device-width, initial-scale=1.0" />
 				<title>fit2bsky-cw Dashboard</title>
+				<link rel="icon" href="/favicon.svg" type="image/svg+xml" />
 				<style>
 					${raw(STYLE)}
 				</style>
