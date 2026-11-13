@@ -32,7 +32,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^1.6.0",
     "@atproto/api": "^0.29.6",
-    "hono": "^4.13.14",
+    "hono": "^4.13.16",
     "jose": "^6.2.15"
   }
 }
