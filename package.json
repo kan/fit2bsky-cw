@@ -15,7 +15,7 @@
     "format:check": "prettier --check src test"
   },
   "devDependencies": {
-    "@cloudflare/vitest-plugin": "^1.4.11",
+    "@cloudflare/vitest-plugin": "^1.6.0",
     "@eslint/js": "^10.0.1",
     "@msw/cloudflare": "^0.2.0",
     "@types/node": "^26.6.6",
@@ -26,13 +26,13 @@
     "msw": "^3.0.4",
     "prettier": "^3.9.10",
     "typescript": "^6.0.3",
-    "vitest": "^5.0.5",
+    "vitest": "^5.1.0",
     "wrangler": "^4.160.0"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.6.0",
-    "@atproto/api": "^0.29.6",
-    "hono": "^4.13.14",
+    "@atproto/api": "^0.30.3",
+    "hono": "^4.13.16",
     "jose": "^6.2.15"
   }
 }
