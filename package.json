@@ -15,24 +15,24 @@
     "format:check": "prettier --check src test"
   },
   "devDependencies": {
-    "@cloudflare/vitest-plugin": "^1.6.0",
+    "@cloudflare/vitest-plugin": "^1.8.2",
     "@eslint/js": "^10.0.1",
     "@msw/cloudflare": "^0.2.0",
     "@types/node": "^26.6.6",
-    "@typescript-eslint/eslint-plugin": "^8.72.1",
+    "@typescript-eslint/eslint-plugin": "^8.72.2",
     "@typescript-eslint/parser": "^8.51.0",
     "eslint": "^10.14.0",
     "eslint-config-prettier": "^10.1.8",
-    "msw": "^3.0.4",
-    "prettier": "^3.9.10",
+    "msw": "^3.0.5",
+    "prettier": "^3.10.1",
     "typescript": "^6.0.3",
     "vitest": "^5.1.0",
     "wrangler": "^4.160.0"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^1.6.0",
-    "@atproto/api": "^0.30.3",
-    "hono": "^4.13.16",
-    "jose": "^6.2.15"
+    "@anthropic-ai/sdk": "^1.8.0",
+    "@atproto/api": "^0.31.2",
+    "hono": "^4.13.18",
+    "jose": "^6.2.17"
   }
 }
